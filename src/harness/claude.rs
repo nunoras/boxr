@@ -21,13 +21,11 @@ impl Harness for ClaudeCode {
             args.push("--effort".to_string());
             args.push(effort.clone());
         }
-        args.extend(
-            ["--output-format", "stream-json", "--verbose", "-p", "--"].map(str::to_string),
-        );
-        args.push(request.prompt.clone());
+        args.extend(["--output-format", "stream-json", "--verbose", "-p"].map(str::to_string));
         Ok(HarnessCommand {
             program: "claude".to_string(),
             args,
+            stdin: Some(request.prompt.clone()),
         })
     }
 

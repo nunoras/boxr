@@ -15,6 +15,7 @@ pub struct LaunchRequest {
 pub struct HarnessCommand {
     pub program: String,
     pub args: Vec<String>,
+    pub stdin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

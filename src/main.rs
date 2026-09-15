@@ -13,7 +13,6 @@ use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED
 use harness::LaunchRequest;
 use output::{one_line, Toon};
 use run::Ledger;
-use session::Session;
 use std::process::ExitCode;
 
 const MESSAGE_LIMIT: usize = 200;
@@ -85,10 +84,9 @@ fn launch() -> Result<i32> {
         cwd,
     };
 
-    let session = Session::create(&home)?;
-    let outcome = run::headless(adapter.as_ref(), &request, &session)?;
+    let outcome = run::headless(adapter.as_ref(), &request, &home)?;
 
-    print!("{}", render(&session, adapter.id(), &request, &outcome));
+    print!("{}", render(adapter.id(), &request, &outcome));
 
     Ok(match (outcome.succeeded(), &outcome.ledger) {
         (false, _) => EXIT_SESSION_FAILED,
@@ -97,12 +95,8 @@ fn launch() -> Result<i32> {
     })
 }
 
-fn render(
-    session: &Session,
-    harness_id: &str,
-    request: &LaunchRequest,
-    outcome: &run::Outcome,
-) -> String {
+fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> String {
+    let session = &outcome.session;
     let mut toon = Toon::new();
     toon.section("session")
         .field("id", &session.id)

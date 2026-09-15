@@ -5,9 +5,9 @@ use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::Instant;
 
 pub enum Ledger {
@@ -16,6 +16,7 @@ pub enum Ledger {
 }
 
 pub struct Outcome {
+    pub session: Session,
     pub exit_code: i32,
     pub harness_session_id: Option<String>,
     pub final_message: Option<String>,
@@ -40,11 +41,7 @@ impl Drop for Supervised {
     }
 }
 
-pub fn headless(
-    harness: &dyn Harness,
-    request: &LaunchRequest,
-    session: &Session,
-) -> Result<Outcome> {
+pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> Result<Outcome> {
     let command = harness.command(request)?;
     let program = locate(&command.program).ok_or_else(|| {
         Fail::harness_unavailable(
@@ -59,22 +56,32 @@ pub fn headless(
         )
     })?;
 
-    let stream_path = session.stream_path();
-    let mut stream_file = create_private_file(&stream_path)?;
-    let stderr_path = session.stderr_path();
-    let mut stderr_file = create_private_file(&stderr_path)?;
-
     let started = Instant::now();
     let mut child = Supervised(
         Command::new(&program)
             .args(&command.args)
             .current_dir(&request.cwd)
-            .stdin(Stdio::null())
+            .stdin(if command.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("starting harness {}", program.display()))?,
     );
+
+    let session = Session::create(home)?;
+    let stream_path = session.stream_path();
+    let mut stream_file = create_private_file(&stream_path)?;
+    let stderr_path = session.stderr_path();
+    let mut stderr_file = create_private_file(&stderr_path)?;
+
+    let stdin_thread = match (command.stdin, child.0.stdin.take()) {
+        (Some(input), Some(pipe)) => Some(std::thread::spawn(move || deliver(pipe, input))),
+        _ => None,
+    };
 
     let stdout = child
         .0
@@ -115,23 +122,37 @@ pub fn headless(
     }
 
     let status = child.0.wait().context("waiting for the harness to exit")?;
+    if let Some(thread) = stdin_thread {
+        thread
+            .join()
+            .map_err(|_| anyhow!("the stdin writer thread panicked"))?
+            .context("writing the harness input")?;
+    }
     stderr_thread
         .join()
         .map_err(|_| anyhow!("the stderr reader thread panicked"))?
         .with_context(|| format!("writing {}", stderr_path.display()))?;
 
-    let ledger = match record_transcript(harness, harness_session_id.as_deref(), session) {
+    let ledger = match record_transcript(harness, harness_session_id.as_deref(), &session) {
         Ok(path) => Ledger::Recorded(path),
         Err(error) => Ledger::Failed(format!("{error:#}")),
     };
 
     Ok(Outcome {
+        session,
         exit_code: exit_code_of(&status),
         harness_session_id,
         final_message,
         ledger,
         duration_ms: started.elapsed().as_millis(),
     })
+}
+
+fn deliver(mut pipe: ChildStdin, input: String) -> std::io::Result<()> {
+    match pipe.write_all(input.as_bytes()) {
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 fn create_private_file(path: &Path) -> Result<File> {
