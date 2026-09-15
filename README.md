@@ -12,6 +12,9 @@ It keeps a local ledger of every session, so you can see which models you use fo
 
 Status: walking skeleton.
 Headless Claude Code launches run and land in the raw ledger under the boxr home (`~/.boxr`, or `BOXR_HOME` when set).
+While a session runs, boxr follows the harness transcript and writes the normalized ledger live: `normalized.jsonl` is a header line, one ATIF step per line, and a closing line of final metrics.
+Each finished session appends one line to `summary.jsonl` in the boxr home.
+`boxr show <id>` prints that summary, and `boxr export --atif <id>` writes a single-document ATIF trajectory (schema ATIF-v1.8).
 Harness, model and effort fall back to `defaults.harness`, `defaults.model` and `defaults.effort` in `config.json` in the boxr home.
 `boxr skill install --harness claude|codex|pi|all` installs the bundled skills into the selected harnesses, and the prompt skill ships as a placeholder for now.
 Everything else in the design is still ahead.

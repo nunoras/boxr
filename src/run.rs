@@ -1,14 +1,18 @@
+use crate::clock::{iso8601, now_millis};
 use crate::fail::Fail;
 use crate::harness::{Harness, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
+use crate::ledger::{self, Follower, Seed, SessionStart, Summary, Tally};
 use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::time::Instant;
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, Once, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 pub enum Ledger {
     Recorded(PathBuf),
@@ -22,6 +26,10 @@ pub struct Outcome {
     pub final_message: Option<String>,
     pub ledger: Ledger,
     pub duration_ms: u128,
+    pub tally: Tally,
+    pub summary: Summary,
+    pub summary_path: PathBuf,
+    pub summary_error: Option<String>,
 }
 
 impl Outcome {
@@ -41,7 +49,11 @@ impl Drop for Supervised {
     }
 }
 
-pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> Result<Outcome> {
+pub fn headless(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    home: &Path,
+) -> Result<Outcome> {
     let command = harness.command(request)?;
     let program = locate(&command.program).ok_or_else(|| {
         Fail::harness_unavailable(
@@ -57,42 +69,55 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
     })?;
 
     let started = Instant::now();
-    let mut child = Supervised(
-        Command::new(&program)
-            .args(&command.args)
-            .current_dir(&request.cwd)
-            .stdin(if command.stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("starting harness {}", program.display()))?,
-    );
+    let started_at = now_millis();
+    let mut spawned = Command::new(&program)
+        .args(&command.args)
+        .current_dir(&request.cwd)
+        .stdin(if command.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("starting harness {}", program.display()))?;
+
+    let stdin_pipe = spawned.stdin.take();
+    let stdout = spawned
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("harness stdout was not captured"))?;
+    let mut stderr = spawned
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
+    let child = Arc::new(Mutex::new(Supervised(spawned)));
+    let stop = watch_for_stop(&child);
 
     let session = Session::create(home)?;
+    let follower = Follower::start(
+        Arc::clone(harness),
+        session.normalized_path(),
+        Seed {
+            session_id: session.id.clone(),
+            harness_id: harness.id().to_string(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            mode: "headless".to_string(),
+            profile: None,
+        },
+    );
     let stream_path = session.stream_path();
     let mut stream_file = create_private_file(&stream_path)?;
     let stderr_path = session.stderr_path();
     let mut stderr_file = create_private_file(&stderr_path)?;
 
-    let stdin_thread = match (command.stdin, child.0.stdin.take()) {
+    let stdin_thread = match (command.stdin, stdin_pipe) {
         (Some(input), Some(pipe)) => Some(std::thread::spawn(move || deliver(pipe, input))),
         _ => None,
     };
 
-    let stdout = child
-        .0
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("harness stdout was not captured"))?;
-    let mut stderr = child
-        .0
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
     let stderr_thread = std::thread::spawn(move || std::io::copy(&mut stderr, &mut stderr_file));
 
     let mut harness_session_id = None;
@@ -115,13 +140,22 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
         match harness.parse_event(String::from_utf8_lossy(&line).trim_end()) {
             StreamEvent::SessionStarted {
                 harness_session_id: id,
-            } => harness_session_id = Some(id),
+                harness_version,
+                model,
+            } => {
+                harness_session_id = Some(id.clone());
+                follower.session_started(SessionStart {
+                    harness_session_id: id,
+                    harness_version,
+                    model,
+                });
+            }
             StreamEvent::FinalMessage { text } => final_message = Some(text),
             StreamEvent::Ignored => {}
         }
     }
 
-    let status = child.0.wait().context("waiting for the harness to exit")?;
+    let status = wait_for(&child)?;
     if let Some(thread) = stdin_thread {
         thread
             .join()
@@ -133,19 +167,195 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
         .map_err(|_| anyhow!("the stderr reader thread panicked"))?
         .with_context(|| format!("writing {}", stderr_path.display()))?;
 
-    let ledger = match record_transcript(harness, harness_session_id.as_deref(), &session) {
+    let tally = follower.finish();
+
+    let ledger = match record_transcript(harness.as_ref(), harness_session_id.as_deref(), &session)
+    {
         Ok(path) => Ledger::Recorded(path),
         Err(error) => Ledger::Failed(format!("{error:#}")),
     };
 
+    let exit_code = exit_code_of(&status);
+    let duration_ms = started.elapsed().as_millis();
+    let ended_at = now_millis();
+    let summary = Summary {
+        id: session.id.clone(),
+        harness: harness.id().to_string(),
+        harness_session_id: harness_session_id.clone(),
+        model: request.model.clone(),
+        effort: request.effort.clone(),
+        profile: None,
+        mode: "headless".to_string(),
+        start: iso8601(started_at),
+        end: iso8601(ended_at),
+        duration_ms: duration_ms as u64,
+        status: status_of(&status, stop.was_requested()).to_string(),
+        exit_code,
+        steps: tally.steps,
+        prompt_tokens: tally.prompt_tokens,
+        completion_tokens: tally.completion_tokens,
+        cached_tokens: tally.cached_tokens,
+    };
+    let summary_path = home.join(ledger::SUMMARY_FILE);
+    let summary_error = ledger::append_summary(&summary_path, &summary)
+        .err()
+        .map(|error| format!("{error:#}"));
+    stop.finalize();
+
     Ok(Outcome {
         session,
-        exit_code: exit_code_of(&status),
+        exit_code,
         harness_session_id,
         final_message,
         ledger,
-        duration_ms: started.elapsed().as_millis(),
+        duration_ms,
+        tally,
+        summary,
+        summary_path,
+        summary_error,
     })
+}
+
+fn status_of(status: &ExitStatus, stopped_by_boxr: bool) -> &'static str {
+    if status.success() {
+        return "ok";
+    }
+    if stopped_by_boxr || stopped_externally(status) {
+        return "interrupted";
+    }
+    "failed"
+}
+
+#[cfg(unix)]
+fn stopped_externally(status: &ExitStatus) -> bool {
+    const HANGUP: i32 = 1;
+    const INTERRUPT: i32 = 2;
+    const KILL: i32 = 9;
+    const TERMINATE: i32 = 15;
+    matches!(
+        signal_of(status),
+        Some(HANGUP | INTERRUPT | KILL | TERMINATE)
+    )
+}
+
+#[cfg(not(unix))]
+fn stopped_externally(status: &ExitStatus) -> bool {
+    const STATUS_CONTROL_C_EXIT: i32 = -1_073_741_510;
+    status.code() == Some(STATUS_CONTROL_C_EXIT)
+}
+
+struct StopRequest {
+    child: Weak<Mutex<Supervised>>,
+    requested: AtomicBool,
+    finalized: Mutex<bool>,
+    finalized_changed: Condvar,
+}
+
+impl StopRequest {
+    fn request(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+        if let Some(child) = self.child.upgrade() {
+            let _ = child.lock().map(|mut supervised| supervised.0.kill());
+        }
+    }
+
+    fn was_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    fn finalize(&self) {
+        *self
+            .finalized
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = true;
+        self.finalized_changed.notify_all();
+    }
+
+    #[cfg(windows)]
+    fn await_finalized(&self, budget: Duration) {
+        let finalized = self
+            .finalized
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _ = self
+            .finalized_changed
+            .wait_timeout_while(finalized, budget, |finalized| !*finalized);
+    }
+}
+
+static ACTIVE_STOP: Mutex<Option<Arc<StopRequest>>> = Mutex::new(None);
+static STOP_HANDLER: Once = Once::new();
+
+fn watch_for_stop(child: &Arc<Mutex<Supervised>>) -> Arc<StopRequest> {
+    let stop = Arc::new(StopRequest {
+        child: Arc::downgrade(child),
+        requested: AtomicBool::new(false),
+        finalized: Mutex::new(false),
+        finalized_changed: Condvar::new(),
+    });
+    *ACTIVE_STOP.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&stop));
+    STOP_HANDLER.call_once(install_stop_handler);
+    stop
+}
+
+fn active_stop() -> Option<Arc<StopRequest>> {
+    ACTIVE_STOP
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+#[cfg(unix)]
+fn install_stop_handler() {
+    let _ = ctrlc::set_handler(|| {
+        if let Some(stop) = active_stop() {
+            stop.request();
+        }
+    });
+}
+
+#[cfg(windows)]
+fn install_stop_handler() {
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::System::Console::{
+        SetConsoleCtrlHandler, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+    };
+    const CLOSE_BUDGET: Duration = Duration::from_millis(4500);
+
+    unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
+        if let Some(stop) = active_stop() {
+            stop.request();
+            if matches!(
+                event,
+                CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
+            ) {
+                stop.await_finalized(CLOSE_BUDGET);
+            }
+        }
+        1
+    }
+
+    unsafe {
+        SetConsoleCtrlHandler(Some(on_console_event), 1);
+    }
+}
+
+fn wait_for(child: &Arc<Mutex<Supervised>>) -> Result<ExitStatus> {
+    loop {
+        {
+            let mut supervised = child
+                .lock()
+                .map_err(|_| anyhow!("the harness supervisor lock was poisoned"))?;
+            if let Some(status) = supervised
+                .0
+                .try_wait()
+                .context("waiting for the harness to exit")?
+            {
+                return Ok(status);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn deliver(mut pipe: ChildStdin, input: String) -> std::io::Result<()> {
@@ -219,17 +429,20 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
-    status.code().unwrap_or_else(|| signal_exit_code(status))
+fn exit_code_of(status: &ExitStatus) -> i32 {
+    status
+        .code()
+        .or_else(|| signal_of(status).map(|signal| 128 + signal))
+        .unwrap_or(1)
 }
 
 #[cfg(unix)]
-fn signal_exit_code(status: &std::process::ExitStatus) -> i32 {
+fn signal_of(status: &ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
-    status.signal().map(|signal| 128 + signal).unwrap_or(1)
+    status.signal()
 }
 
 #[cfg(not(unix))]
-fn signal_exit_code(_status: &std::process::ExitStatus) -> i32 {
-    1
+fn signal_of(_status: &ExitStatus) -> Option<i32> {
+    None
 }
