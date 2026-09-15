@@ -80,8 +80,9 @@ Three layers per session:
    `boxr export --atif <id>` wraps the lines into a standard ATIF document.
 3. Summary: one line per session with harness, model, effort, profile, subscription, start, end, tokens, cost, status, kind and outcomes.
    All analytics query this layer.
-   Status is `ok` for a zero exit and `interrupted` when the harness was stopped from outside or by boxr itself: an external-stop signal (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGKILL`) on Unix, `STATUS_CONTROL_C_EXIT` on Windows, or a termination boxr caused on either platform.
+   Status is `ok` for a zero exit and `interrupted` when the harness was stopped from outside or by boxr itself: an external-stop signal (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGKILL`) on Unix, Ctrl-C or Ctrl-Break (`STATUS_CONTROL_C_EXIT`) on Windows, or a termination boxr caused on either platform.
    A crash signal such as `SIGSEGV` or `SIGABRT` is not an interruption.
+   One narrow Windows exception: a forced kill by a third party (`taskkill /F`, `TerminateProcess`) exits with an ordinary code that cannot be told apart from a real failure, so it is recorded as `failed`.
    Every other non-zero exit is `failed`, with or without a final result.
    When boxr itself is asked to stop, it kills the harness, lets the transcript follower finish, writes the closing line and a summary marked `interrupted`, and only then exits.
 

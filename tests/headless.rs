@@ -143,7 +143,15 @@ impl Harness {
     }
 
     fn spawn(&self, args: &[&str]) -> Child {
-        self.command(args, Some(&self.bin_dir))
+        let mut command = self.command(args, Some(&self.bin_dir));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            unsafe { console::AllocConsole() };
+            command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        }
+        command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -821,7 +829,7 @@ fn a_reply_split_across_transcript_lines_counts_its_tokens_once_on_a_step_with_c
 }
 
 #[test]
-fn a_harness_killed_mid_run_still_leaves_a_ledger_and_an_interrupted_summary() {
+fn a_harness_killed_mid_run_still_leaves_a_closed_ledger_and_a_summary() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");
     harness.hang_after(9);
@@ -845,14 +853,42 @@ fn a_harness_killed_mid_run_still_leaves_a_ledger_and_an_interrupted_summary() {
     assert_eq!(unanswered, 2, "{lines:?}");
 
     let summary = summary_of(&harness, &session_id_of(&stdout));
-    assert!(stdout.contains("status: interrupted"), "{stdout}");
-    assert_eq!(summary["status"], "interrupted");
     if cfg!(unix) {
+        assert!(stdout.contains("status: interrupted"), "{stdout}");
+        assert_eq!(summary["status"], "interrupted");
         assert_eq!(summary["exitCode"], 128 + 9);
+    } else {
+        assert!(stdout.contains("status: failed"), "{stdout}");
+        assert_eq!(summary["status"], "failed");
+        assert_eq!(summary["exitCode"], 1);
     }
 }
 
 #[cfg(unix)]
+fn interrupt(boxr: &Child) {
+    let status = Command::new("kill")
+        .args(["-INT", &boxr.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(status.success(), "could not interrupt boxr");
+}
+
+#[cfg(windows)]
+mod console {
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn AllocConsole() -> i32;
+        pub fn GenerateConsoleCtrlEvent(event: u32, process_group: u32) -> i32;
+    }
+}
+
+#[cfg(windows)]
+fn interrupt(boxr: &Child) {
+    const CTRL_BREAK_EVENT: u32 = 1;
+    let sent = unsafe { console::GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, boxr.id()) };
+    assert_ne!(sent, 0, "could not send Ctrl-Break to boxr");
+}
+
 #[test]
 fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted() {
     let mut harness = Harness::new();
@@ -861,11 +897,7 @@ fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted()
     let child = harness.spawn(&["--harness", "claude", "--model", "opus", "review"]);
     harness.await_hung_harness();
 
-    let status = Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
-        .status()
-        .expect("kill runs");
-    assert!(status.success(), "could not interrupt boxr");
+    interrupt(&child);
 
     let output = child.wait_with_output().expect("boxr finishes");
     let stdout = stdout_of(&output);

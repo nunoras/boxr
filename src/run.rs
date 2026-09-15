@@ -246,11 +246,11 @@ fn stopped_externally(status: &ExitStatus) -> bool {
 fn stop_on_signal(child: &Arc<Mutex<Supervised>>) -> Arc<AtomicBool> {
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stopped);
-    let target = Arc::clone(child);
+    let target = Arc::downgrade(child);
     let _ = ctrlc::set_handler(move || {
         flag.store(true, Ordering::SeqCst);
-        if let Ok(mut supervised) = target.lock() {
-            let _ = supervised.0.kill();
+        if let Some(child) = target.upgrade() {
+            let _ = child.lock().map(|mut supervised| supervised.0.kill());
         }
     });
     stopped
