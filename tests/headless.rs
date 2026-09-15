@@ -1,6 +1,9 @@
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 struct Harness {
     root: tempfile::TempDir,
@@ -9,6 +12,8 @@ struct Harness {
     prompt_file: PathBuf,
     exit_code: String,
     withhold_transcript: bool,
+    delay_ms: String,
+    kill_after: Option<String>,
 }
 
 impl Harness {
@@ -27,6 +32,8 @@ impl Harness {
             prompt_file,
             exit_code: "0".to_string(),
             withhold_transcript: false,
+            delay_ms: "5".to_string(),
+            kill_after: None,
         }
     }
 
@@ -78,11 +85,31 @@ impl Harness {
         self.withhold_transcript = true;
     }
 
+    fn slow_harness(&mut self, delay_ms: u64) {
+        self.delay_ms = delay_ms.to_string();
+    }
+
+    fn kill_after(&mut self, lines: usize) {
+        self.kill_after = Some(lines.to_string());
+    }
+
     fn run(&self, args: &[&str]) -> Output {
         self.run_with_path(args, Some(&self.bin_dir))
     }
 
+    fn spawn(&self, args: &[&str]) -> Child {
+        self.command(args, Some(&self.bin_dir))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("boxr starts")
+    }
+
     fn run_with_path(&self, args: &[&str], bin_dir: Option<&Path>) -> Output {
+        self.command(args, bin_dir).output().expect("boxr runs")
+    }
+
+    fn command(&self, args: &[&str], bin_dir: Option<&Path>) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxr"));
         command
             .args(args)
@@ -91,7 +118,7 @@ impl Harness {
             .env("CLAUDE_CONFIG_DIR", self.root.path().join("claude"))
             .env("BOXR_FAKE_CLAUDE_FIXTURE", fixture_dir())
             .env("BOXR_FAKE_CLAUDE_EXIT", &self.exit_code)
-            .env("BOXR_FAKE_CLAUDE_DELAY_MS", "5")
+            .env("BOXR_FAKE_CLAUDE_DELAY_MS", &self.delay_ms)
             .env("BOXR_FAKE_CLAUDE_PROMPT", &self.prompt_file)
             .env(
                 "PATH",
@@ -105,7 +132,10 @@ impl Harness {
         if self.withhold_transcript {
             command.env("BOXR_FAKE_CLAUDE_NO_TRANSCRIPT", "1");
         }
-        command.output().expect("boxr runs")
+        if let Some(lines) = &self.kill_after {
+            command.env("BOXR_FAKE_CLAUDE_KILL_AFTER", lines);
+        }
+        command
     }
 }
 
@@ -402,4 +432,253 @@ fn a_cmd_shim_on_path_launches_claude() {
     );
     assert!(stdout.contains("status: ok"), "{stdout}");
     assert!(stdout.contains("ledger: recorded"), "{stdout}");
+}
+
+fn session_id_of(stdout: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("id: "))
+        .expect("session id line")
+        .to_string()
+}
+
+fn normalized_lines(path: &Path) -> Vec<Value> {
+    fs::read_to_string(path)
+        .expect("normalized ledger")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("a json line"))
+        .collect()
+}
+
+fn summary_of(harness: &Harness, id: &str) -> Value {
+    fs::read_to_string(harness.boxr_home().join("summary.jsonl"))
+        .expect("summary ledger")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("a json line"))
+        .find(|value| value["id"] == id)
+        .expect("a summary line for the session")
+}
+
+fn assert_valid_atif(document: &Value) {
+    assert_eq!(document["schema_version"], "ATIF-v1.8");
+    assert!(document["session_id"].is_string(), "{document}");
+    assert!(document["agent"]["name"].is_string(), "{document}");
+    assert!(document["agent"]["version"].is_string(), "{document}");
+    let steps = document["steps"].as_array().expect("steps array");
+    assert!(!steps.is_empty(), "{document}");
+    for (index, step) in steps.iter().enumerate() {
+        assert_eq!(step["step_id"], (index + 1) as i64, "{step}");
+        let source = step["source"].as_str().expect("step source");
+        assert!(
+            matches!(source, "system" | "user" | "agent"),
+            "unknown source {source}"
+        );
+        assert!(step["message"].is_string(), "{step}");
+        if let Some(timestamp) = step["timestamp"].as_str() {
+            assert!(
+                timestamp.ends_with('Z') && timestamp.contains('T'),
+                "{step}"
+            );
+        }
+        if source != "agent" {
+            for field in [
+                "model_name",
+                "reasoning_effort",
+                "reasoning_content",
+                "tool_calls",
+                "metrics",
+            ] {
+                assert!(step.get(field).is_none(), "{field} on a {source} step");
+            }
+        }
+        for call in step["tool_calls"].as_array().unwrap_or(&Vec::new()) {
+            assert!(call["tool_call_id"].is_string(), "{call}");
+            assert!(call["function_name"].is_string(), "{call}");
+            assert!(call["arguments"].is_object(), "{call}");
+        }
+    }
+    let metrics = &document["final_metrics"];
+    assert_eq!(metrics["total_steps"], steps.len() as i64, "{document}");
+    assert!(metrics["total_prompt_tokens"].is_u64(), "{document}");
+}
+
+#[test]
+fn steps_land_in_the_normalized_ledger_while_the_harness_is_still_writing() {
+    let mut harness = Harness::new();
+    harness.slow_harness(400);
+    let mut child = harness.spawn(&["--harness", "claude", "--model", "sonnet", "hello"]);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut seen_early = false;
+    while Instant::now() < deadline {
+        if child.try_wait().expect("child status").is_some() {
+            break;
+        }
+        let sessions = harness.boxr_home().join("sessions");
+        if let Ok(entries) = fs::read_dir(&sessions) {
+            for entry in entries.flatten() {
+                let path = entry.path().join("normalized.jsonl");
+                if let Ok(text) = fs::read_to_string(&path) {
+                    if text.contains("\"source\":\"user\"") {
+                        seen_early = true;
+                    }
+                }
+            }
+        }
+        if seen_early {
+            break;
+        }
+        sleep(Duration::from_millis(20));
+    }
+
+    let status = child.wait().expect("boxr finishes");
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        seen_early,
+        "no normalized step appeared before the harness exited"
+    );
+}
+
+#[test]
+fn the_normalized_ledger_is_a_header_then_atif_steps_then_final_metrics() {
+    let harness = Harness::new();
+    let output = harness.run(&[
+        "--harness",
+        "claude",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high",
+        "hello",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    assert!(lines.len() >= 3, "{lines:?}");
+
+    let header = &lines[0];
+    assert_eq!(header["schema_version"], "ATIF-v1.8");
+    assert_eq!(header["agent"]["name"], "claude");
+    assert_eq!(header["agent"]["version"], "2.1.272");
+    assert_eq!(header["extra"]["effort"], "high");
+    assert_eq!(
+        header["extra"]["harnessSessionId"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+
+    let closing = lines.last().expect("closing line");
+    assert_eq!(
+        closing["final_metrics"]["total_steps"],
+        lines.len() as i64 - 2
+    );
+    assert_eq!(closing["final_metrics"]["total_completion_tokens"], 11);
+
+    for (index, step) in lines[1..lines.len() - 1].iter().enumerate() {
+        assert_eq!(step["step_id"], (index + 1) as i64, "{step}");
+        assert!(step["message"].is_string(), "{step}");
+    }
+    assert_eq!(lines[1]["source"], "user");
+    assert_eq!(lines[2]["source"], "agent");
+    assert_eq!(lines[2]["model_name"], "claude-sonnet-5");
+    assert_eq!(lines[2]["metrics"]["cached_tokens"], 18538);
+}
+
+#[test]
+fn a_summary_line_records_the_session_with_its_token_counts() {
+    let harness = Harness::new();
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness, &session_id_of(&stdout));
+    assert_eq!(summary["harness"], "claude");
+    assert_eq!(summary["model"], "sonnet");
+    assert_eq!(summary["mode"], "headless");
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["exitCode"], 0);
+    assert_eq!(
+        summary["harnessSessionId"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    assert_eq!(summary["steps"], 2);
+    assert_eq!(summary["promptTokens"], 43279);
+    assert_eq!(summary["completionTokens"], 11);
+    assert_eq!(summary["cachedTokens"], 18538);
+    assert!(summary["start"].as_str().expect("start").ends_with('Z'));
+    assert!(summary["end"].as_str().expect("end").ends_with('Z'));
+    assert!(summary["durationMs"].is_u64());
+}
+
+#[test]
+fn show_prints_the_session_as_toon() {
+    let harness = Harness::new();
+    let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let id = session_id_of(&stdout_of(&launched));
+
+    let output = harness.run(&["show", &id]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.starts_with("session:"), "{stdout}");
+    assert!(stdout.contains(&format!("id: {id}")), "{stdout}");
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(stdout.contains("mode: headless"), "{stdout}");
+    assert!(stdout.contains("completionTokens: 11"), "{stdout}");
+    assert!(stdout.contains("help[1]:"), "{stdout}");
+}
+
+#[test]
+fn show_of_an_unknown_session_is_a_usage_error() {
+    let harness = Harness::new();
+    let output = harness.run(&["show", "s-nope"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout_of(&output));
+    assert!(
+        stderr_of(&output).contains("no session s-nope"),
+        "{}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn export_atif_writes_a_document_that_matches_the_schema() {
+    let harness = Harness::new();
+    let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let id = session_id_of(&stdout_of(&launched));
+
+    let output = harness.run(&["export", "--atif", &id]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("schemaVersion: ATIF-v1.8"), "{stdout}");
+
+    let path = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("path: "))
+        .expect("export path");
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
+    assert_valid_atif(&document);
+    assert_eq!(document["session_id"], id.as_str());
+    assert_eq!(document["extra"]["status"], "ok");
+}
+
+#[test]
+fn a_harness_killed_mid_run_still_leaves_a_ledger_and_an_interrupted_summary() {
+    let mut harness = Harness::new();
+    harness.kill_after(2);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: interrupted"), "{stdout}");
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    assert_eq!(lines[0]["schema_version"], "ATIF-v1.8");
+    assert!(
+        lines.last().expect("closing line")["final_metrics"].is_object(),
+        "{lines:?}"
+    );
+
+    let summary = summary_of(&harness, &session_id_of(&stdout));
+    assert_eq!(summary["status"], "interrupted");
+    assert_eq!(summary["exitCode"], 137);
 }

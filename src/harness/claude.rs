@@ -1,7 +1,8 @@
 use super::{Harness, HarnessCommand, LaunchRequest, StreamEvent};
+use crate::atif::{Metrics, Observation, ObservationResult, Step, ToolCall};
 use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::fs;
 use std::path::PathBuf;
 
@@ -39,6 +40,8 @@ impl Harness for ClaudeCode {
                 .and_then(Value::as_str)
                 .map(|id| StreamEvent::SessionStarted {
                     harness_session_id: id.to_string(),
+                    harness_version: text_at(&value, "claude_code_version"),
+                    model: text_at(&value, "model"),
                 })
                 .unwrap_or(StreamEvent::Ignored),
             Some("result") => value
@@ -72,4 +75,134 @@ impl Harness for ClaudeCode {
             projects.display()
         ))
     }
+
+    fn transcript_step(&self, line: &str) -> Option<Step> {
+        let value = serde_json::from_str::<Value>(line).ok()?;
+        match value.get("type").and_then(Value::as_str) {
+            Some("user") => user_step(&value),
+            Some("assistant") => assistant_step(&value),
+            _ => None,
+        }
+    }
+}
+
+fn user_step(value: &Value) -> Option<Step> {
+    let content = value.get("message")?.get("content")?;
+    let mut step = match content {
+        Value::String(text) => Step::new("user", text.clone()),
+        Value::Array(parts) => {
+            let results = tool_results(parts);
+            let mut step = Step::new("user", joined_text(parts));
+            if !results.is_empty() {
+                step.observation = Some(Observation { results });
+            }
+            step
+        }
+        _ => return None,
+    };
+    step.timestamp = text_at(value, "timestamp");
+    Some(step)
+}
+
+fn assistant_step(value: &Value) -> Option<Step> {
+    let message = value.get("message")?;
+    let parts = message.get("content")?.as_array()?;
+    let mut step = Step::new("agent", joined_text(parts));
+    step.timestamp = text_at(value, "timestamp");
+    step.model_name = text_at(message, "model");
+    step.reasoning_effort = text_at(value, "effort");
+    step.reasoning_content = reasoning(parts);
+    let calls = tool_calls(parts);
+    if !calls.is_empty() {
+        step.tool_calls = Some(calls);
+    }
+    step.metrics = message.get("usage").and_then(metrics);
+    Some(step)
+}
+
+fn joined_text(parts: &[Value]) -> String {
+    parts
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn reasoning(parts: &[Value]) -> Option<String> {
+    let thoughts = parts
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("thinking"))
+        .filter_map(|part| part.get("thinking").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!thoughts.is_empty()).then_some(thoughts)
+}
+
+fn tool_calls(parts: &[Value]) -> Vec<ToolCall> {
+    parts
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .map(|part| ToolCall {
+            tool_call_id: text_at(part, "id").unwrap_or_else(|| "unknown".to_string()),
+            function_name: text_at(part, "name").unwrap_or_else(|| "unknown".to_string()),
+            arguments: part
+                .get("input")
+                .cloned()
+                .unwrap_or(Value::Object(Map::new())),
+        })
+        .collect()
+}
+
+fn tool_results(parts: &[Value]) -> Vec<ObservationResult> {
+    parts
+        .iter()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("tool_result"))
+        .map(|part| ObservationResult {
+            source_call_id: text_at(part, "tool_use_id"),
+            content: result_content(part.get("content")),
+        })
+        .collect()
+}
+
+fn result_content(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => joined_text(parts),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+fn metrics(usage: &Value) -> Option<Metrics> {
+    let input = number_at(usage, "input_tokens");
+    let created = number_at(usage, "cache_creation_input_tokens");
+    let cached = number_at(usage, "cache_read_input_tokens");
+    let output = number_at(usage, "output_tokens");
+    let mut extra = Map::new();
+    if created > 0 {
+        extra.insert(
+            "cache_creation_input_tokens".to_string(),
+            Value::from(created),
+        );
+    }
+    Some(Metrics {
+        prompt_tokens: Some(input + created + cached),
+        completion_tokens: Some(output),
+        cached_tokens: Some(cached),
+        cost_usd: None,
+        extra: (!extra.is_empty()).then_some(extra),
+    })
+}
+
+fn number_at(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn text_at(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.is_empty())
 }

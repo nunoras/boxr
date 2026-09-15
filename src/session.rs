@@ -17,8 +17,23 @@ impl Session {
         Ok(Session { id, dir })
     }
 
+    pub fn open(home: &Path, id: &str) -> Session {
+        Session {
+            id: id.to_string(),
+            dir: home.join("sessions").join(id),
+        }
+    }
+
     pub fn raw_dir(&self) -> PathBuf {
         self.dir.join("raw")
+    }
+
+    pub fn normalized_path(&self) -> PathBuf {
+        self.dir.join("normalized.jsonl")
+    }
+
+    pub fn trajectory_path(&self) -> PathBuf {
+        self.dir.join("export").join("trajectory.atif.json")
     }
 
     pub fn stream_path(&self) -> PathBuf {

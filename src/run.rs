@@ -1,6 +1,8 @@
+use crate::clock::{iso8601, now_millis};
 use crate::fail::Fail;
 use crate::harness::{Harness, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
+use crate::ledger::{self, Follower, Seed, SessionStart, Summary, Tally};
 use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
 use std::env;
@@ -8,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
 use std::time::Instant;
 
 pub enum Ledger {
@@ -22,6 +25,9 @@ pub struct Outcome {
     pub final_message: Option<String>,
     pub ledger: Ledger,
     pub duration_ms: u128,
+    pub tally: Tally,
+    pub summary: Summary,
+    pub summary_path: PathBuf,
 }
 
 impl Outcome {
@@ -41,7 +47,11 @@ impl Drop for Supervised {
     }
 }
 
-pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> Result<Outcome> {
+pub fn headless(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    home: &Path,
+) -> Result<Outcome> {
     let command = harness.command(request)?;
     let program = locate(&command.program).ok_or_else(|| {
         Fail::harness_unavailable(
@@ -57,6 +67,7 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
     })?;
 
     let started = Instant::now();
+    let started_at = now_millis();
     let mut child = Supervised(
         Command::new(&program)
             .args(&command.args)
@@ -73,6 +84,18 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
     );
 
     let session = Session::create(home)?;
+    let follower = Follower::start(
+        Arc::clone(harness),
+        session.normalized_path(),
+        Seed {
+            session_id: session.id.clone(),
+            harness_id: harness.id().to_string(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            mode: "headless".to_string(),
+            profile: None,
+        },
+    );
     let stream_path = session.stream_path();
     let mut stream_file = create_private_file(&stream_path)?;
     let stderr_path = session.stderr_path();
@@ -115,7 +138,16 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
         match harness.parse_event(String::from_utf8_lossy(&line).trim_end()) {
             StreamEvent::SessionStarted {
                 harness_session_id: id,
-            } => harness_session_id = Some(id),
+                harness_version,
+                model,
+            } => {
+                harness_session_id = Some(id.clone());
+                follower.session_started(SessionStart {
+                    harness_session_id: id,
+                    harness_version,
+                    model,
+                });
+            }
             StreamEvent::FinalMessage { text } => final_message = Some(text),
             StreamEvent::Ignored => {}
         }
@@ -133,19 +165,56 @@ pub fn headless(harness: &dyn Harness, request: &LaunchRequest, home: &Path) -> 
         .map_err(|_| anyhow!("the stderr reader thread panicked"))?
         .with_context(|| format!("writing {}", stderr_path.display()))?;
 
-    let ledger = match record_transcript(harness, harness_session_id.as_deref(), &session) {
+    let tally = follower.finish();
+
+    let ledger = match record_transcript(harness.as_ref(), harness_session_id.as_deref(), &session)
+    {
         Ok(path) => Ledger::Recorded(path),
         Err(error) => Ledger::Failed(format!("{error:#}")),
     };
 
+    let exit_code = exit_code_of(&status);
+    let duration_ms = started.elapsed().as_millis();
+    let ended_at = now_millis();
+    let summary = Summary {
+        id: session.id.clone(),
+        harness: harness.id().to_string(),
+        harness_session_id: harness_session_id.clone(),
+        model: request.model.clone(),
+        effort: request.effort.clone(),
+        profile: None,
+        mode: "headless".to_string(),
+        start: iso8601(started_at),
+        end: iso8601(ended_at),
+        duration_ms: duration_ms as u64,
+        status: status_of(exit_code, final_message.is_some()).to_string(),
+        exit_code,
+        steps: tally.steps,
+        prompt_tokens: tally.prompt_tokens,
+        completion_tokens: tally.completion_tokens,
+        cached_tokens: tally.cached_tokens,
+    };
+    let summary_path = ledger::append_summary(home, &summary)?;
+
     Ok(Outcome {
         session,
-        exit_code: exit_code_of(&status),
+        exit_code,
         harness_session_id,
         final_message,
         ledger,
-        duration_ms: started.elapsed().as_millis(),
+        duration_ms,
+        tally,
+        summary,
+        summary_path,
     })
+}
+
+fn status_of(exit_code: i32, has_final_message: bool) -> &'static str {
+    match (exit_code, has_final_message) {
+        (0, _) => "ok",
+        (_, true) => "failed",
+        (_, false) => "interrupted",
+    }
 }
 
 fn deliver(mut pipe: ChildStdin, input: String) -> std::io::Result<()> {

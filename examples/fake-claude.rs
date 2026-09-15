@@ -12,6 +12,7 @@ const ARGS_ENV: &str = "BOXR_FAKE_CLAUDE_ARGS";
 const PROMPT_ENV: &str = "BOXR_FAKE_CLAUDE_PROMPT";
 const DELAY_ENV: &str = "BOXR_FAKE_CLAUDE_DELAY_MS";
 const NO_TRANSCRIPT_ENV: &str = "BOXR_FAKE_CLAUDE_NO_TRANSCRIPT";
+const KILL_AFTER_ENV: &str = "BOXR_FAKE_CLAUDE_KILL_AFTER";
 
 fn main() -> ExitCode {
     let fixture = match env::var_os(FIXTURE_ENV) {
@@ -101,9 +102,17 @@ fn main() -> ExitCode {
         }
     };
 
+    let kill_after = env::var(KILL_AFTER_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+
     let mut stdout = std::io::stdout();
     let mut transcript_lines = transcript.lines();
-    for line in stream.lines() {
+    for (emitted, line) in stream.lines().enumerate() {
+        if kill_after == Some(emitted) {
+            eprintln!("fake claude dying mid-run");
+            return ExitCode::from(137);
+        }
         if let Some(entry) = transcript_lines.next() {
             append(&mut transcript_file, entry);
         }
