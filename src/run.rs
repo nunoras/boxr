@@ -1,18 +1,25 @@
+use crate::fail::Fail;
 use crate::harness::{Harness, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
 use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
+use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::time::Instant;
+
+pub enum Ledger {
+    Recorded(PathBuf),
+    Failed(String),
+}
 
 pub struct Outcome {
     pub exit_code: i32,
     pub harness_session_id: Option<String>,
     pub final_message: Option<String>,
-    pub transcript: Option<PathBuf>,
+    pub ledger: Ledger,
     pub duration_ms: u128,
 }
 
@@ -22,66 +29,83 @@ impl Outcome {
     }
 }
 
+struct Supervised(Child);
+
+impl Drop for Supervised {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 pub fn headless(
     harness: &dyn Harness,
     request: &LaunchRequest,
     session: &Session,
 ) -> Result<Outcome> {
     let command = harness.command(request)?;
-    let mut child = Command::new(&command.program)
-        .args(&command.args)
-        .envs(command.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .current_dir(&request.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                anyhow!(
-                    "harness executable `{}` was not found on PATH",
-                    command.program
-                )
-            } else {
-                anyhow::Error::from(error)
-                    .context(format!("starting harness `{}`", command.program))
-            }
-        })?;
+    let program = locate(&command.program).ok_or_else(|| {
+        Fail::harness_unavailable(
+            format!(
+                "harness executable `{}` was not found on PATH",
+                command.program
+            ),
+            vec![format!(
+                "Install {} or put its executable on PATH",
+                harness.id()
+            )],
+        )
+    })?;
+
+    let stream_path = session.stream_path();
+    let mut stream_file = create_private_file(&stream_path)?;
+    let stderr_path = session.stderr_path();
+    let mut stderr_file = create_private_file(&stderr_path)?;
 
     let started = Instant::now();
-    let stream_path = session.stream_path();
-    let mut stream_file = File::create(&stream_path)
-        .with_context(|| format!("creating {}", stream_path.display()))?;
-    restrict_file(&stream_path)?;
-
-    let mut harness_session_id = None;
-    let mut final_message = None;
+    let mut child = Supervised(
+        Command::new(&program)
+            .args(&command.args)
+            .current_dir(&request.cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("starting harness {}", program.display()))?,
+    );
 
     let stdout = child
+        .0
         .stdout
         .take()
         .ok_or_else(|| anyhow!("harness stdout was not captured"))?;
     let mut stderr = child
+        .0
         .stderr
         .take()
         .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
-    let stderr_path = session.stderr_path();
-    let stderr_thread = std::thread::spawn(move || -> Result<()> {
-        let mut file = File::create(&stderr_path)
-            .with_context(|| format!("creating {}", stderr_path.display()))?;
-        std::io::copy(&mut stderr, &mut file)?;
-        restrict_file(&stderr_path)
-    });
+    let stderr_thread = std::thread::spawn(move || std::io::copy(&mut stderr, &mut stderr_file));
 
-    for line in BufReader::new(stdout).lines() {
-        let line = line.context("reading harness stdout")?;
-        writeln!(stream_file, "{line}")
-            .with_context(|| format!("writing {}", stream_path.display()))?;
-        stream_file.flush()?;
-        if !command.events_on_stdout {
-            continue;
+    let mut harness_session_id = None;
+    let mut final_message = None;
+    let mut reader = BufReader::new(stdout);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader
+            .read_until(b'\n', &mut line)
+            .context("reading harness stdout")?
+            == 0
+        {
+            break;
         }
-        match harness.parse_event(&line) {
+        stream_file
+            .write_all(&line)
+            .and_then(|()| stream_file.flush())
+            .with_context(|| format!("writing {}", stream_path.display()))?;
+        match harness.parse_event(String::from_utf8_lossy(&line).trim_end()) {
             StreamEvent::SessionStarted {
                 harness_session_id: id,
             } => harness_session_id = Some(id),
@@ -90,31 +114,88 @@ pub fn headless(
         }
     }
 
-    let status = child.wait().context("waiting for the harness to exit")?;
+    let status = child.0.wait().context("waiting for the harness to exit")?;
     stderr_thread
         .join()
-        .map_err(|_| anyhow!("the stderr reader thread panicked"))??;
+        .map_err(|_| anyhow!("the stderr reader thread panicked"))?
+        .with_context(|| format!("writing {}", stderr_path.display()))?;
 
-    let transcript = harness_session_id
-        .as_deref()
-        .and_then(|id| harness.transcript(&command, id))
-        .and_then(|source| copy_transcript(&source, session).ok());
+    let ledger = match record_transcript(harness, harness_session_id.as_deref(), session) {
+        Ok(path) => Ledger::Recorded(path),
+        Err(error) => Ledger::Failed(format!("{error:#}")),
+    };
 
     Ok(Outcome {
         exit_code: exit_code_of(&status),
         harness_session_id,
         final_message,
-        transcript,
+        ledger,
         duration_ms: started.elapsed().as_millis(),
     })
 }
 
-fn copy_transcript(source: &std::path::Path, session: &Session) -> Result<PathBuf> {
+fn create_private_file(path: &Path) -> Result<File> {
+    let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    restrict_file(path)?;
+    Ok(file)
+}
+
+fn record_transcript(
+    harness: &dyn Harness,
+    harness_session_id: Option<&str>,
+    session: &Session,
+) -> Result<PathBuf> {
+    let id = harness_session_id.ok_or_else(|| anyhow!("the harness reported no session id"))?;
+    let source = harness.transcript(id)?;
     let target = session.transcript_path();
-    fs::copy(source, &target)
+    fs::copy(&source, &target)
         .with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
     restrict_file(&target)?;
     Ok(target)
+}
+
+fn locate(program: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .flat_map(|dir| {
+            executable_names(program)
+                .into_iter()
+                .map(move |name| dir.join(name))
+        })
+        .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(windows)]
+fn executable_names(program: &str) -> Vec<String> {
+    env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .filter(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                ".com" | ".exe" | ".bat" | ".cmd"
+            )
+        })
+        .map(|extension| format!("{program}{extension}"))
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn executable_names(program: &str) -> Vec<String> {
+    vec![program.to_string()]
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn exit_code_of(status: &std::process::ExitStatus) -> i32 {

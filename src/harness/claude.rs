@@ -1,5 +1,6 @@
-use super::{Harness, HarnessCommand, LaunchRequest, Mode, StreamEvent};
-use anyhow::Result;
+use super::{Harness, HarnessCommand, LaunchRequest, StreamEvent};
+use crate::home::user_home;
+use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::env;
 use std::fs;
@@ -20,25 +21,13 @@ impl Harness for ClaudeCode {
             args.push("--effort".to_string());
             args.push(effort.clone());
         }
-        let events_on_stdout = match request.mode {
-            Mode::Headless => {
-                args.push("--output-format".to_string());
-                args.push("stream-json".to_string());
-                args.push("--verbose".to_string());
-                args.push("-p".to_string());
-                args.push(request.prompt.clone());
-                true
-            }
-            Mode::Interactive => {
-                args.push(request.prompt.clone());
-                false
-            }
-        };
+        args.extend(
+            ["--output-format", "stream-json", "--verbose", "-p", "--"].map(str::to_string),
+        );
+        args.push(request.prompt.clone());
         Ok(HarnessCommand {
             program: "claude".to_string(),
             args,
-            env: Vec::new(),
-            events_on_stdout,
         })
     }
 
@@ -65,42 +54,31 @@ impl Harness for ClaudeCode {
         }
     }
 
-    fn transcript(&self, command: &HarnessCommand, harness_session_id: &str) -> Option<PathBuf> {
-        let projects = config_dir(command)?.join("projects");
+    fn transcript(&self, harness_session_id: &str) -> Result<PathBuf> {
+        let projects = config_dir()
+            .ok_or_else(|| {
+                anyhow!("cannot locate the claude config directory; set {CONFIG_DIR_ENV}")
+            })?
+            .join("projects");
         let wanted = format!("{harness_session_id}.jsonl");
-        let entries = fs::read_dir(projects).ok()?;
+        let entries =
+            fs::read_dir(&projects).with_context(|| format!("reading {}", projects.display()))?;
         for entry in entries.flatten() {
             let candidate = entry.path().join(&wanted);
             if candidate.is_file() {
-                return Some(candidate);
+                return Ok(candidate);
             }
         }
-        None
+        Err(anyhow!(
+            "no transcript {wanted} under {}",
+            projects.display()
+        ))
     }
 }
 
-fn config_dir(command: &HarnessCommand) -> Option<PathBuf> {
-    for (key, value) in &command.env {
-        if key == CONFIG_DIR_ENV {
-            return Some(PathBuf::from(value));
-        }
+fn config_dir() -> Option<PathBuf> {
+    match env::var_os(CONFIG_DIR_ENV) {
+        Some(value) if !value.is_empty() => Some(PathBuf::from(value)),
+        _ => user_home().map(|home| home.join(".claude")),
     }
-    if let Some(value) = env::var_os(CONFIG_DIR_ENV) {
-        if !value.is_empty() {
-            return Some(PathBuf::from(value));
-        }
-    }
-    user_home().map(|home| home.join(".claude"))
-}
-
-fn user_home() -> Option<PathBuf> {
-    let keys: &[&str] = if cfg!(windows) {
-        &["USERPROFILE", "HOME"]
-    } else {
-        &["HOME"]
-    };
-    keys.iter()
-        .filter_map(env::var_os)
-        .find(|value| !value.is_empty())
-        .map(PathBuf::from)
 }

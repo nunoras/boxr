@@ -9,9 +9,10 @@ mod session;
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::Config;
-use fail::{Fail, EXIT_INTERNAL, EXIT_OK, EXIT_SESSION_FAILED};
-use harness::{LaunchRequest, Mode};
+use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
+use harness::LaunchRequest;
 use output::{one_line, Toon};
+use run::Ledger;
 use session::Session;
 use std::process::ExitCode;
 
@@ -78,7 +79,6 @@ fn launch() -> Result<i32> {
 
     let cwd = std::env::current_dir().context("reading the current directory")?;
     let request = LaunchRequest {
-        mode: Mode::Headless,
         model,
         effort,
         prompt,
@@ -86,33 +86,14 @@ fn launch() -> Result<i32> {
     };
 
     let session = Session::create(&home)?;
-    let outcome =
-        run::headless(adapter.as_ref(), &request, &session).map_err(|error| {
-            match error.downcast::<Fail>() {
-                Ok(fail) => anyhow::Error::from(fail),
-                Err(error) => {
-                    let message = error.to_string();
-                    if message.contains("was not found on PATH") {
-                        anyhow::Error::from(Fail::harness_unavailable(
-                            message,
-                            vec![format!(
-                                "Install {} or put its executable on PATH",
-                                adapter.id()
-                            )],
-                        ))
-                    } else {
-                        error
-                    }
-                }
-            }
-        })?;
+    let outcome = run::headless(adapter.as_ref(), &request, &session)?;
 
     print!("{}", render(&session, adapter.id(), &request, &outcome));
 
-    Ok(if outcome.succeeded() {
-        EXIT_OK
-    } else {
-        EXIT_SESSION_FAILED
+    Ok(match (outcome.succeeded(), &outcome.ledger) {
+        (false, _) => EXIT_SESSION_FAILED,
+        (true, Ledger::Failed(_)) => EXIT_LEDGER_FAILED,
+        (true, Ledger::Recorded(_)) => EXIT_OK,
     })
 }
 
@@ -136,8 +117,8 @@ fn render(
             "harnessSessionId",
             outcome.harness_session_id.as_deref().unwrap_or("unknown"),
         )
-        .field("durationMs", &outcome.duration_ms.to_string())
-        .field("exitCode", &outcome.exit_code.to_string())
+        .number("durationMs", outcome.duration_ms)
+        .number("exitCode", outcome.exit_code)
         .field(
             "message",
             &one_line(
@@ -145,24 +126,26 @@ fn render(
                 MESSAGE_LIMIT,
             ),
         );
-    toon.section("raw")
+    let raw = toon
+        .section("raw")
         .field("dir", &session.raw_dir().display().to_string())
-        .field("stream", &session.stream_path().display().to_string())
-        .field(
-            "transcript",
-            &outcome
-                .transcript
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string()),
-        );
+        .field("stream", &session.stream_path().display().to_string());
+    let record_line = match &outcome.ledger {
+        Ledger::Recorded(transcript) => {
+            raw.field("ledger", "recorded")
+                .field("transcript", &transcript.display().to_string());
+            format!("Read the raw transcript at {}", transcript.display())
+        }
+        Ledger::Failed(reason) => {
+            raw.field("ledger", "failed")
+                .field("ledgerError", &one_line(reason, MESSAGE_LIMIT));
+            format!("Read the raw stream at {}", session.stream_path().display())
+        }
+    };
 
     let help = if outcome.succeeded() {
         vec![
-            format!(
-                "Read the raw transcript at {}",
-                session.transcript_path().display()
-            ),
+            record_line,
             "Run `boxr --harness claude --model <m> \"<prompt>\"` to launch another session"
                 .to_string(),
         ]
@@ -172,7 +155,7 @@ fn render(
                 "Read {} for the harness error output",
                 session.stderr_path().display()
             ),
-            format!("Read the raw stream at {}", session.stream_path().display()),
+            record_line,
         ]
     };
     toon.list("help", &help);
@@ -212,7 +195,7 @@ fn report(error: &anyhow::Error) -> i32 {
     let mut toon = Toon::new();
     toon.section("error")
         .field("message", &one_line(&message, MESSAGE_LIMIT))
-        .field("exitCode", &code.to_string());
+        .number("exitCode", code);
     toon.list("help", &help);
     eprint!("{}", toon.render());
     code

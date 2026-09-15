@@ -10,6 +10,7 @@ const FIXTURE_ENV: &str = "BOXR_FAKE_CLAUDE_FIXTURE";
 const EXIT_ENV: &str = "BOXR_FAKE_CLAUDE_EXIT";
 const ARGS_ENV: &str = "BOXR_FAKE_CLAUDE_ARGS";
 const DELAY_ENV: &str = "BOXR_FAKE_CLAUDE_DELAY_MS";
+const NO_TRANSCRIPT_ENV: &str = "BOXR_FAKE_CLAUDE_NO_TRANSCRIPT";
 
 fn main() -> ExitCode {
     let fixture = match env::var_os(FIXTURE_ENV) {
@@ -71,11 +72,15 @@ fn main() -> ExitCode {
             .unwrap_or(5),
     );
 
-    let mut transcript_file = match fs::File::create(&transcript_path) {
-        Ok(file) => file,
-        Err(error) => {
-            eprintln!("cannot create the transcript: {error}");
-            return ExitCode::from(97);
+    let mut transcript_file = if env::var_os(NO_TRANSCRIPT_ENV).is_some() {
+        None
+    } else {
+        match fs::File::create(&transcript_path) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                eprintln!("cannot create the transcript: {error}");
+                return ExitCode::from(97);
+            }
         }
     };
 
@@ -83,16 +88,14 @@ fn main() -> ExitCode {
     let mut transcript_lines = transcript.lines();
     for line in stream.lines() {
         if let Some(entry) = transcript_lines.next() {
-            let _ = writeln!(transcript_file, "{entry}");
-            let _ = transcript_file.flush();
+            append(&mut transcript_file, entry);
         }
         let _ = writeln!(stdout, "{line}");
         let _ = stdout.flush();
         sleep(delay);
     }
     for entry in transcript_lines {
-        let _ = writeln!(transcript_file, "{entry}");
-        let _ = transcript_file.flush();
+        append(&mut transcript_file, entry);
         sleep(delay);
     }
 
@@ -104,6 +107,13 @@ fn main() -> ExitCode {
         eprintln!("fake claude failing on purpose with exit code {code}");
     }
     ExitCode::from(code)
+}
+
+fn append(transcript_file: &mut Option<fs::File>, entry: &str) {
+    if let Some(file) = transcript_file {
+        let _ = writeln!(file, "{entry}");
+        let _ = file.flush();
+    }
 }
 
 fn session_id(stream: &str) -> Option<String> {

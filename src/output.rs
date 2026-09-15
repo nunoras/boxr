@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::fmt::{Display, Write as _};
 
 pub struct Toon {
     body: String,
@@ -21,6 +21,11 @@ impl Toon {
         self
     }
 
+    pub fn number(&mut self, key: &str, value: impl Display) -> &mut Toon {
+        let _ = writeln!(self.body, "  {key}: {value}");
+        self
+    }
+
     pub fn list(&mut self, name: &str, items: &[String]) -> &mut Toon {
         let _ = writeln!(self.body, "{name}[{}]:", items.len());
         for item in items {
@@ -35,15 +40,38 @@ impl Toon {
 }
 
 pub fn scalar(value: &str) -> String {
-    let needs_quotes = value.is_empty()
-        || value
-            .chars()
-            .any(|c| c.is_whitespace() || matches!(c, ',' | ':' | '"' | '[' | ']' | '{' | '}'));
-    if needs_quotes {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    if needs_quotes(value) {
+        format!("\"{}\"", escape(value))
     } else {
         value.to_string()
     }
+}
+
+fn needs_quotes(value: &str) -> bool {
+    value.is_empty()
+        || value.starts_with('-')
+        || matches!(value, "true" | "false" | "null")
+        || value.parse::<f64>().is_ok()
+        || value.chars().any(|c| {
+            c.is_whitespace()
+                || c.is_control()
+                || matches!(c, ',' | ':' | '"' | '\\' | '[' | ']' | '{' | '}')
+        })
+}
+
+fn escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 pub fn one_line(text: &str, limit: usize) -> String {
