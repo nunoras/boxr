@@ -1,6 +1,6 @@
 ---
 name: verify-boxr
-description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's launch surface (`--harness`, `--model`, `--effort`, `--account`, `--kind`, `--interactive`, `--detach`), the ledger under the boxr home, and the `show`, `export`, `account`, `stats`, `prompts`, `eval` and `skill install` commands. Run it before a release, after changing a harness adapter, the launcher or the ledger writer, or when a harness changes its output format.
+description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there. Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher or the ledger writer, or when a harness changes its output format.
 ---
 
 # verify-boxr
@@ -42,7 +42,8 @@ It runs four steps in order.
 2. Drive.
    Runs one real headless session against the throwaway home.
 3. Evidence.
-   Copies the TOON result and the raw ledger layers into the run's evidence directory and writes `meta.txt` with the doctor facts, the boxr session id and the harness session id.
+   Copies the TOON result and the raw ledger layers into the run's evidence directory.
+   `meta.txt` is written before the drive step with the doctor facts, and the boxr pid, exit code, timeout, session ids and cleanup result are appended as they become known, so a failing run keeps it too.
 4. Cleanup.
    Deletes the throwaway home, asserts it is gone, and asserts the evidence is still there.
 
@@ -57,19 +58,18 @@ It carries how to reach the feature, how to drive it, the end state that proves 
 
 - [headless-launch](features/headless-launch.md): `boxr --harness claude --model <m> "<prompt>"`, the default blocking mode.
 
-A ticket that adds user-facing surface adds its own feature file and wires a driver into `scripts/verify-boxr.sh` as part of its own work.
+A ticket that adds user-facing surface adds its own feature file, wires a driver into `scripts/verify-boxr.sh`, and extends the frontmatter description as part of its own work.
 `features/README.md` states what a feature file must contain.
 
 ## Switches
 
+The harness is always Claude Code and the prompt is a fixed one-line no-tool prompt.
 The driver reads these environment variables.
 
 | variable | default | meaning |
 |---|---|---|
-| `BOXR_VERIFY_HARNESS` | `claude` | harness to drive |
 | `BOXR_VERIFY_MODEL` | `haiku` | model to drive, keep it the cheapest that works |
 | `BOXR_VERIFY_EFFORT` | `low` | effort level, empty string drops the flag |
-| `BOXR_VERIFY_PROMPT` | a one-line no-tool prompt | the prompt to send |
 | `BOXR_VERIFY_TIMEOUT` | `300` | seconds before the session is killed |
 | `BOXR_VERIFY_EVIDENCE` | `~/.boxr-verify` | evidence root |
 
@@ -84,5 +84,5 @@ The driver reads these environment variables.
 - A harness that is missing from `PATH` exits 3 and creates no session.
   That is a doctor failure, not a drive failure.
 - A ledger failure exits 5 while `status: ok` still appears, so check the exit code and not just the TOON body.
-- The timeout path kills the whole process group when `setsid` exists, and only boxr otherwise, so a killed run can leave an orphaned harness process.
-  Find it by the session id recorded in the run directory, never by process name.
+- A timeout or an interrupt kills the whole process group when `setsid` exists, and only boxr otherwise, so a killed run without `setsid` can leave an orphaned harness process.
+  Find it as a child of the `boxrPid` recorded in `meta.txt`, never by process name.

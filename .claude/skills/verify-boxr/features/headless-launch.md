@@ -21,7 +21,7 @@ The driver builds `target/release/boxr` and then runs this from a scratch direct
 
 ```
 BOXR_HOME=<throwaway>/home boxr --harness claude --model haiku --effort low \
-  "Reply with the single word ok and nothing else."
+  -- "Reply with the single word ok and nothing else."
 ```
 
 That is one real Claude Code session on the machine's normal login.
@@ -41,7 +41,7 @@ Then `sessions/<boxr id>/raw/` under the throwaway home holds:
 | `stderr.log` | the harness's stderr, empty on a clean run |
 
 The evidence directory holds `toon.txt`, `stderr.txt`, `build.log`, `meta.txt` and `raw/` with those same three files.
-`meta.txt` records the binary hash, the git revision, the harness version, the config directory used, the boxr session id and the harness session id.
+`meta.txt` records the binary hash, the git revision, the harness version, the config directory used, the boxr pid, the exit code, whether it timed out, the boxr session id, the harness session id and whether the throwaway home was removed.
 
 ## Gotchas
 
