@@ -6,11 +6,11 @@ skill_dir="$(cd "$(dirname "$0")/.." && pwd)"
 repo_root="$(cd "$skill_dir/../../.." && pwd)"
 
 harness=claude
-model="${BOXR_VERIFY_MODEL:-haiku}"
-effort="${BOXR_VERIFY_EFFORT-low}"
-budget="${BOXR_VERIFY_TIMEOUT:-300}"
+model=haiku
+effort=low
+budget=300
 prompt="Reply with the single word ok and nothing else."
-evidence_root="${BOXR_VERIFY_EVIDENCE:-$HOME/.boxr-verify}"
+evidence_root="$HOME/.boxr-verify"
 
 step="doctor"
 say() { printf '%s\n' "$*"; }
@@ -165,7 +165,7 @@ fi
   printf 'harnessConfigDir: %s\n' "$config_dir"
   printf 'harnessProfileSource: %s\n' "$profile_source"
   printf 'model: %s\n' "$model"
-  printf 'effort: %s\n' "${effort:-harness-default}"
+  printf 'effort: %s\n' "$effort"
   printf 'prompt: %s\n' "$prompt"
   printf 'throwaway: %s\n' "$throwaway"
 } >"$meta"
@@ -179,11 +179,7 @@ export BOXR_HOME
 timed_out=no
 
 launch() {
-  set -- "$boxr_bin" --harness "$harness" --model "$model"
-  if [ -n "$effort" ]; then
-    set -- "$@" --effort "$effort"
-  fi
-  set -- "$@" -- "$prompt"
+  set -- "$boxr_bin" --harness "$harness" --model "$model" --effort "$effort" -- "$prompt"
   if [ "$use_setsid" = yes ]; then
     setsid "$@" >"$run_dir/toon.txt" 2>"$run_dir/stderr.txt" &
   else

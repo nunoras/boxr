@@ -13,7 +13,7 @@ This skill drives the real harness in a throwaway boxr home, saves what it produ
 ## This spends real quota
 
 Every drive step starts a real paid session on a real subscription.
-The defaults are the smallest spend that still proves the feature: one session, the smallest model, a one-line prompt, no tools, no detach.
+The fixed inputs are the smallest spend that still proves the feature: one session, the smallest model, a one-line prompt, no tools, no detach.
 Do not loop this skill.
 Do not run it in CI.
 Run it once per change you need to prove.
@@ -61,17 +61,10 @@ It carries how to reach the feature, how to drive it, the end state that proves 
 A ticket that adds user-facing surface adds its own feature file, wires a driver into `scripts/verify-boxr.sh`, and extends the frontmatter description as part of its own work.
 `features/README.md` states what a feature file must contain.
 
-## Switches
+## Fixed inputs
 
-The harness is always Claude Code and the prompt is a fixed one-line no-tool prompt.
-The driver reads these environment variables.
-
-| variable | default | meaning |
-|---|---|---|
-| `BOXR_VERIFY_MODEL` | `haiku` | model to drive, keep it the cheapest that works |
-| `BOXR_VERIFY_EFFORT` | `low` | effort level, empty string drops the flag |
-| `BOXR_VERIFY_TIMEOUT` | `300` | seconds before the session is killed |
-| `BOXR_VERIFY_EVIDENCE` | `~/.boxr-verify` | evidence root |
+The driver takes no switches.
+It always drives Claude Code on `haiku` at `--effort low` with a fixed one-line no-tool prompt, kills the session after 300 seconds, and writes evidence under `~/.boxr-verify`.
 
 ## Gotchas
 
@@ -80,7 +73,6 @@ The driver reads these environment variables.
   Account profiles (#3) remove that trace by giving the run its own config directory.
 - The run uses the machine's normal harness login, because account profiles do not exist yet.
   The doctor step reads the same ambient config directory boxr will use, and refuses to run when it holds no login.
-- Removing `--effort` matters for models that reject it. Set `BOXR_VERIFY_EFFORT=` to drop the flag.
 - A harness that is missing from `PATH` exits 3 and creates no session.
   That is a doctor failure, not a drive failure.
 - A ledger failure exits 5 while `status: ok` still appears, so check the exit code and not just the TOON body.

@@ -50,8 +50,8 @@ The evidence directory holds `toon.txt`, `stderr.txt`, `build.log`, `meta.txt` a
   `meta.txt` records the exact path.
 - boxr sends the prompt to the harness on stdin, not on the command line, so a long prompt or one holding quotes and newlines is fine.
   Put `--` before a prompt that starts with a dash so boxr's own parser does not read it as a flag.
-- `--effort low` is accepted by Claude Code and refused by models that do not support effort.
-  Drop the flag with `BOXR_VERIFY_EFFORT=` when a model rejects it.
+- `--effort low` is accepted by Claude Code on `haiku`.
+  A model that does not support effort refuses the flag, so changing the driver's model means checking that first.
 - Claude Code returns quickly for a one-word prompt, but a cold start can take a few seconds.
   A run that takes minutes is a hang, not a slow model.
 - Success is the exit code, not the word `ok` in the output.
