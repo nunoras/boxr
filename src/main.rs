@@ -5,14 +5,16 @@ mod home;
 mod output;
 mod run;
 mod session;
+mod skill;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use config::Config;
 use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
 use harness::LaunchRequest;
 use output::{one_line, Toon};
 use run::Ledger;
+use std::ffi::OsStr;
 use std::process::ExitCode;
 
 const MESSAGE_LIMIT: usize = 200;
@@ -38,15 +40,91 @@ struct Cli {
     prompt: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+#[command(name = "boxr", disable_help_subcommand = true)]
+struct SkillCli {
+    #[command(subcommand)]
+    command: SkillCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillCommand {
+    Skill(SkillNamespace),
+}
+
+#[derive(Args, Debug)]
+struct SkillNamespace {
+    #[command(subcommand)]
+    command: SkillAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillAction {
+    Install {
+        #[arg(long, value_name = "HARNESS")]
+        harness: String,
+    },
+}
+
 fn main() -> ExitCode {
-    match launch() {
+    match run() {
         Ok(code) => ExitCode::from(code as u8),
         Err(error) => ExitCode::from(report(&error) as u8),
     }
 }
 
-fn launch() -> Result<i32> {
-    let cli = Cli::parse();
+fn run() -> Result<i32> {
+    if is_skill_install_command() {
+        let cli = SkillCli::parse();
+        return match cli.command {
+            SkillCommand::Skill(SkillNamespace {
+                command: SkillAction::Install { harness },
+            }) => skill_install(&harness),
+        };
+    }
+    launch(Cli::parse())
+}
+
+fn is_skill_install_command() -> bool {
+    let mut args = std::env::args_os().skip(1);
+    args.next().as_deref() == Some(OsStr::new("skill"))
+        && args.next().as_deref() == Some(OsStr::new("install"))
+}
+
+fn skill_install(harness: &str) -> Result<i32> {
+    let installed = skill::install(harness)?;
+    print!("{}", render_skill_install(&installed));
+    Ok(EXIT_OK)
+}
+
+fn render_skill_install(installed: &[skill::Installed]) -> String {
+    let skills: Vec<String> = skill::names().map(str::to_string).collect();
+    let mut harnesses: Vec<&str> = installed.iter().map(|item| item.harness).collect();
+    harnesses.dedup();
+    let mut toon = Toon::new();
+    toon.section("skill")
+        .field("action", "install")
+        .number("harnesses", harnesses.len());
+    toon.list("skills", &skills);
+    let rows: Vec<String> = installed
+        .iter()
+        .map(|item| format!("{}: {}", item.harness, item.dir.display()))
+        .collect();
+    toon.list("installed", &rows);
+    let help = installed
+        .first()
+        .map(|item| {
+            vec![
+                format!("Read the skill at {}", item.dir.join("SKILL.md").display()),
+                "Run `boxr skill install --harness all` to update every harness".to_string(),
+            ]
+        })
+        .unwrap_or_default();
+    toon.list("help", &help);
+    toon.render()
+}
+
+fn launch(cli: Cli) -> Result<i32> {
     let prompt = cli.prompt.clone().ok_or_else(|| {
         Fail::usage(
             "no prompt given",
