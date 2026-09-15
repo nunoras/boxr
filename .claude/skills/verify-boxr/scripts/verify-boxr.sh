@@ -14,7 +14,8 @@ evidence_root="${BOXR_VERIFY_EVIDENCE:-$HOME/.boxr-verify}"
 
 step="doctor"
 say() { printf '%s\n' "$*"; }
-die() { say "verify: failed" >&2; say "  step: $step" >&2; say "  why: $*" >&2; exit 1; }
+fail() { code="$1"; shift; say "verify: failed" >&2; say "  step: $step" >&2; say "  why: $*" >&2; exit "$code"; }
+die() { fail 1 "$@"; }
 
 field() { sed -n "s/^  $2: //p" "$1" | head -n 1; }
 
@@ -107,7 +108,9 @@ cleanup() {
   remove_throwaway
   exit "$code"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'fail 130 "interrupted by SIGINT"' INT
+trap 'fail 143 "terminated by SIGTERM"' TERM
 
 mkdir -p "$run_dir" "$boxr_home" "$work"
 say "verify: feature $feature"
