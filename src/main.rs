@@ -196,10 +196,12 @@ fn launch(cli: Cli) -> Result<i32> {
 
     print!("{}", render(adapter.id(), &request, &outcome));
 
-    Ok(match (outcome.succeeded(), &outcome.ledger) {
+    let ledger_failed =
+        matches!(outcome.ledger, Ledger::Failed(_)) || outcome.tally.error.is_some();
+    Ok(match (outcome.succeeded(), ledger_failed) {
         (false, _) => EXIT_SESSION_FAILED,
-        (true, Ledger::Failed(_)) => EXIT_LEDGER_FAILED,
-        (true, Ledger::Recorded(_)) => EXIT_OK,
+        (true, true) => EXIT_LEDGER_FAILED,
+        (true, false) => EXIT_OK,
     })
 }
 
@@ -228,7 +230,8 @@ fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> 
                 MESSAGE_LIMIT,
             ),
         );
-    toon.section("ledger")
+    let ledger = toon
+        .section("ledger")
         .field(
             "normalized",
             &session.normalized_path().display().to_string(),
@@ -238,6 +241,9 @@ fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> 
         .number("completionTokens", outcome.tally.completion_tokens)
         .number("cachedTokens", outcome.tally.cached_tokens)
         .field("summary", &outcome.summary_path.display().to_string());
+    if let Some(error) = &outcome.tally.error {
+        ledger.field("captureError", &one_line(error, MESSAGE_LIMIT));
+    }
     let raw = toon
         .section("raw")
         .field("dir", &session.raw_dir().display().to_string())

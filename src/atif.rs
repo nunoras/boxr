@@ -28,8 +28,7 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ObservationResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_call_id: Option<String>,
+    pub source_call_id: String,
     pub content: String,
 }
 

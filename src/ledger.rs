@@ -1,11 +1,15 @@
-use crate::atif::{Agent, Closing, FinalMetrics, Header, Trajectory, SCHEMA_VERSION};
-use crate::harness::Harness;
+use crate::atif::{
+    Agent, Closing, FinalMetrics, Header, Observation, ObservationResult, Step, Trajectory,
+    SCHEMA_VERSION,
+};
+use crate::harness::{Harness, TranscriptEntry};
 use crate::home::restrict_file;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -58,7 +62,7 @@ impl Follower {
         let handle = thread::spawn(move || {
             let mut tally = Tally::default();
             if let Err(error) = capture(harness, &path, &seed, receiver, &flag, &mut tally) {
-                tally.error = Some(format!("{error:#}"));
+                tally.error.get_or_insert_with(|| format!("{error:#}"));
             }
             tally
         });
@@ -91,20 +95,129 @@ fn capture(
     stop: &AtomicBool,
     tally: &mut Tally,
 ) -> Result<()> {
-    let mut file = create_private_file(path)?;
+    let mut normalizer = Normalizer {
+        file: create_private_file(path)?,
+        path,
+        tally,
+        held: Vec::new(),
+        counted_responses: HashSet::new(),
+    };
     let start = await_start(&receiver, stop);
-    write_line(&mut file, path, &header(seed, start.as_ref()))?;
+    normalizer.write(&header(seed, start.as_ref()))?;
 
     if let Some(start) = start {
-        match await_transcript(harness.as_ref(), &start.harness_session_id, stop) {
-            Ok(transcript) => {
-                follow_file(harness.as_ref(), &transcript, &mut file, path, stop, tally)?
-            }
-            Err(error) => tally.error = Some(format!("{error:#}")),
+        let followed = await_transcript(harness.as_ref(), &start.harness_session_id, stop)
+            .and_then(|transcript| {
+                follow_file(harness.as_ref(), &transcript, &mut normalizer, stop)
+            });
+        if let Err(error) = followed {
+            normalizer.tally.error = Some(format!("{error:#}"));
         }
     }
 
-    write_line(&mut file, path, &closing(tally))
+    normalizer.close()
+}
+
+struct Normalizer<'a> {
+    file: File,
+    path: &'a Path,
+    tally: &'a mut Tally,
+    held: Vec<Step>,
+    counted_responses: HashSet<String>,
+}
+
+impl Normalizer<'_> {
+    fn accept(&mut self, entry: TranscriptEntry) -> Result<()> {
+        match entry {
+            TranscriptEntry::Step {
+                mut step,
+                response_id,
+            } => {
+                if let Some(id) = response_id {
+                    if !self.counted_responses.insert(id) {
+                        step.metrics = None;
+                    }
+                }
+                if step
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty())
+                {
+                    self.held.push(*step);
+                    Ok(())
+                } else {
+                    self.append(*step)
+                }
+            }
+            TranscriptEntry::ToolResults(results) => {
+                for result in results {
+                    self.fold(result);
+                }
+                self.append_answered()
+            }
+        }
+    }
+
+    fn fold(&mut self, result: ObservationResult) {
+        let caller = self.held.iter_mut().find(|step| {
+            step.tool_calls
+                .iter()
+                .flatten()
+                .any(|call| call.tool_call_id == result.source_call_id)
+        });
+        if let Some(step) = caller {
+            step.observation
+                .get_or_insert_with(|| Observation {
+                    results: Vec::new(),
+                })
+                .results
+                .push(result);
+        }
+    }
+
+    fn append_answered(&mut self) -> Result<()> {
+        let (answered, waiting): (Vec<Step>, Vec<Step>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(is_answered);
+        self.held = waiting;
+        answered.into_iter().try_for_each(|step| self.append(step))
+    }
+
+    fn append(&mut self, mut step: Step) -> Result<()> {
+        self.tally.steps += 1;
+        step.step_id = self.tally.steps;
+        if let Some(metrics) = &step.metrics {
+            self.tally.prompt_tokens += metrics.prompt_tokens.unwrap_or(0);
+            self.tally.completion_tokens += metrics.completion_tokens.unwrap_or(0);
+            self.tally.cached_tokens += metrics.cached_tokens.unwrap_or(0);
+        }
+        self.write(&step)
+    }
+
+    fn write(&mut self, value: &impl Serialize) -> Result<()> {
+        write_line(&mut self.file, self.path, value)
+    }
+
+    fn close(mut self) -> Result<()> {
+        std::mem::take(&mut self.held)
+            .into_iter()
+            .try_for_each(|step| self.append(step))?;
+        let closing = closing(self.tally);
+        self.write(&closing)
+    }
+}
+
+fn is_answered(step: &Step) -> bool {
+    let results = step
+        .observation
+        .as_ref()
+        .map(|observation| observation.results.as_slice())
+        .unwrap_or_default();
+    step.tool_calls.iter().flatten().all(|call| {
+        results
+            .iter()
+            .any(|result| result.source_call_id == call.tool_call_id)
+    })
 }
 
 fn await_start(receiver: &Receiver<SessionStart>, stop: &AtomicBool) -> Option<SessionStart> {
@@ -143,67 +256,29 @@ fn await_transcript(
 fn follow_file(
     harness: &dyn Harness,
     transcript: &Path,
-    file: &mut File,
-    path: &Path,
+    normalizer: &mut Normalizer,
     stop: &AtomicBool,
-    tally: &mut Tally,
 ) -> Result<()> {
     let mut source =
         File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
-    let mut offset = 0u64;
     let mut pending = Vec::new();
     loop {
         let finished = stop.load(Ordering::SeqCst);
-        drain(
-            harness,
-            &mut source,
-            &mut offset,
-            &mut pending,
-            file,
-            path,
-            tally,
-        )?;
+        source
+            .read_to_end(&mut pending)
+            .with_context(|| format!("reading {}", transcript.display()))?;
+        while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = pending.drain(..=index).collect();
+            if let Some(entry) = harness.transcript_entry(String::from_utf8_lossy(&line).trim_end())
+            {
+                normalizer.accept(entry)?;
+            }
+        }
         if finished {
             return Ok(());
         }
         thread::sleep(POLL);
     }
-}
-
-fn drain(
-    harness: &dyn Harness,
-    source: &mut File,
-    offset: &mut u64,
-    pending: &mut Vec<u8>,
-    file: &mut File,
-    path: &Path,
-    tally: &mut Tally,
-) -> Result<()> {
-    source
-        .seek(SeekFrom::Start(*offset))
-        .with_context(|| format!("seeking in {}", path.display()))?;
-    let mut fresh = Vec::new();
-    let read = source
-        .read_to_end(&mut fresh)
-        .with_context(|| format!("reading the harness transcript for {}", path.display()))?;
-    *offset += read as u64;
-    pending.extend_from_slice(&fresh);
-    while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
-        let line: Vec<u8> = pending.drain(..=index).collect();
-        let text = String::from_utf8_lossy(&line);
-        let Some(mut step) = harness.transcript_step(text.trim_end()) else {
-            continue;
-        };
-        tally.steps += 1;
-        step.step_id = tally.steps;
-        if let Some(metrics) = &step.metrics {
-            tally.prompt_tokens += metrics.prompt_tokens.unwrap_or(0);
-            tally.completion_tokens += metrics.completion_tokens.unwrap_or(0);
-            tally.cached_tokens += metrics.cached_tokens.unwrap_or(0);
-        }
-        write_line(file, path, &step)?;
-    }
-    Ok(())
 }
 
 fn header(seed: &Seed, start: Option<&SessionStart>) -> Header {

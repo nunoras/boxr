@@ -91,6 +91,17 @@ Hooks are the backup, for a harness that does not flush while running or for eve
 Hooks are installed inside boxr's own profile directories, never in the user's normal harness setup.
 Importing old transcripts uses the same parsers.
 
+### Tool calls in the normalized layer
+
+Claude Code writes each content block of one model reply (thinking, text, each `tool_use`) as its own transcript line, and every one of those lines repeats the reply's usage.
+boxr maps each line to one agent step but counts a reply's usage once, on the first step it appears on.
+Tool results arrive later on separate `type: user` lines.
+They cannot become their own steps: ATIF allows `observation` only on agent steps, and the Harbor validator rejects any observation whose `source_call_id` does not match a `tool_call_id` on the same step, so a later step cannot answer an earlier step's call.
+So an agent step that carries tool calls is held back until the results for all of its calls have arrived, then appended once with the results folded in as its `observation`.
+Steps without tool calls are appended immediately, and step ids follow append order.
+Liveness lags by tool duration for held steps, and every appended line stays a valid ATIF step.
+When the harness dies before a result arrives, the held step is appended without it before the closing line, so an interrupted session still has a complete, valid file.
+
 ### Secrets
 
 The raw layer is stored verbatim with owner-only permissions (0600 files in a 0700 directory) and is never read by any model.

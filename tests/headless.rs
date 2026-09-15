@@ -14,6 +14,7 @@ struct Harness {
     withhold_transcript: bool,
     delay_ms: String,
     kill_after: Option<String>,
+    fixture: &'static str,
 }
 
 impl Harness {
@@ -34,6 +35,7 @@ impl Harness {
             withhold_transcript: false,
             delay_ms: "5".to_string(),
             kill_after: None,
+            fixture: "hello",
         }
     }
 
@@ -93,6 +95,22 @@ impl Harness {
         self.kill_after = Some(lines.to_string());
     }
 
+    fn use_fixture(&mut self, name: &'static str) {
+        self.fixture = name;
+    }
+
+    fn harness_transcript_lines(&self) -> usize {
+        let projects = self.root.path().join("claude").join("projects");
+        fs::read_dir(projects)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|project| fs::read_dir(project.path()).into_iter().flatten().flatten())
+            .filter_map(|file| fs::read_to_string(file.path()).ok())
+            .map(|text| text.lines().count())
+            .sum()
+    }
+
     fn run(&self, args: &[&str]) -> Output {
         self.run_with_path(args, Some(&self.bin_dir))
     }
@@ -116,7 +134,7 @@ impl Harness {
             .current_dir(self.root.path().join("work"))
             .env("BOXR_HOME", self.boxr_home())
             .env("CLAUDE_CONFIG_DIR", self.root.path().join("claude"))
-            .env("BOXR_FAKE_CLAUDE_FIXTURE", fixture_dir())
+            .env("BOXR_FAKE_CLAUDE_FIXTURE", fixture_dir(self.fixture))
             .env("BOXR_FAKE_CLAUDE_EXIT", &self.exit_code)
             .env("BOXR_FAKE_CLAUDE_DELAY_MS", &self.delay_ms)
             .env("BOXR_FAKE_CLAUDE_PROMPT", &self.prompt_file)
@@ -139,8 +157,10 @@ impl Harness {
     }
 }
 
-fn fixture_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude/hello")
+fn fixture_dir(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/claude")
+        .join(name)
 }
 
 fn fake_name() -> &'static str {
@@ -235,12 +255,13 @@ fn the_raw_transcript_lands_verbatim_under_the_boxr_home() {
 
     let raw = session_dir(&harness).join("raw");
     let copied = fs::read(raw.join("transcript.jsonl")).expect("copied transcript");
-    let original = fs::read(fixture_dir().join("transcript.jsonl")).expect("fixture transcript");
+    let original =
+        fs::read(fixture_dir("hello").join("transcript.jsonl")).expect("fixture transcript");
     assert_eq!(copied, original);
 
     let stream = fs::read_to_string(raw.join("stream.jsonl")).expect("copied stream");
     let fixture_stream =
-        fs::read_to_string(fixture_dir().join("stream.jsonl")).expect("fixture stream");
+        fs::read_to_string(fixture_dir("hello").join("stream.jsonl")).expect("fixture stream");
     assert_eq!(stream.lines().count(), fixture_stream.lines().count());
     assert!(stream.contains("\"type\":\"result\""), "{stream}");
 }
@@ -341,6 +362,10 @@ fn an_unrecorded_transcript_is_a_ledger_failure_with_its_own_exit_code() {
     assert!(stdout.contains("status: ok"), "{stdout}");
     assert!(stdout.contains("ledger: failed"), "{stdout}");
     assert!(stdout.contains("ledgerError: "), "{stdout}");
+    assert!(
+        stdout.contains("captureError: \"the harness never wrote a transcript"),
+        "{stdout}"
+    );
     assert!(!stdout.contains("Read the raw transcript"), "{stdout}");
     assert!(!session_dir(&harness).join("raw/transcript.jsonl").exists());
 }
@@ -460,14 +485,9 @@ fn summary_of(harness: &Harness, id: &str) -> Value {
         .expect("a summary line for the session")
 }
 
-fn assert_valid_atif(document: &Value) {
-    assert_eq!(document["schema_version"], "ATIF-v1.8");
-    assert!(document["session_id"].is_string(), "{document}");
-    assert!(document["agent"]["name"].is_string(), "{document}");
-    assert!(document["agent"]["version"].is_string(), "{document}");
-    let steps = document["steps"].as_array().expect("steps array");
-    assert!(!steps.is_empty(), "{document}");
+fn assert_valid_steps(steps: &[Value]) {
     for (index, step) in steps.iter().enumerate() {
+        let none = Vec::new();
         assert_eq!(step["step_id"], (index + 1) as i64, "{step}");
         let source = step["source"].as_str().expect("step source");
         assert!(
@@ -487,17 +507,38 @@ fn assert_valid_atif(document: &Value) {
                 "reasoning_effort",
                 "reasoning_content",
                 "tool_calls",
+                "observation",
                 "metrics",
             ] {
                 assert!(step.get(field).is_none(), "{field} on a {source} step");
             }
         }
-        for call in step["tool_calls"].as_array().unwrap_or(&Vec::new()) {
-            assert!(call["tool_call_id"].is_string(), "{call}");
+        let mut call_ids = Vec::new();
+        for call in step["tool_calls"].as_array().unwrap_or(&none) {
+            call_ids.push(call["tool_call_id"].as_str().expect("tool_call_id"));
             assert!(call["function_name"].is_string(), "{call}");
             assert!(call["arguments"].is_object(), "{call}");
         }
+        for result in step["observation"]["results"].as_array().unwrap_or(&none) {
+            assert!(result["content"].is_string(), "{result}");
+            if let Some(source_call_id) = result["source_call_id"].as_str() {
+                assert!(
+                    call_ids.contains(&source_call_id),
+                    "observation {source_call_id} has no tool call on step {step}"
+                );
+            }
+        }
     }
+}
+
+fn assert_valid_atif(document: &Value) {
+    assert_eq!(document["schema_version"], "ATIF-v1.8");
+    assert!(document["session_id"].is_string(), "{document}");
+    assert!(document["agent"]["name"].is_string(), "{document}");
+    assert!(document["agent"]["version"].is_string(), "{document}");
+    let steps = document["steps"].as_array().expect("steps array");
+    assert!(!steps.is_empty(), "{document}");
+    assert_valid_steps(steps);
     let metrics = &document["final_metrics"];
     assert_eq!(metrics["total_steps"], steps.len() as i64, "{document}");
     assert!(metrics["total_prompt_tokens"].is_u64(), "{document}");
@@ -508,26 +549,28 @@ fn steps_land_in_the_normalized_ledger_while_the_harness_is_still_writing() {
     let mut harness = Harness::new();
     harness.slow_harness(400);
     let mut child = harness.spawn(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let fixture_lines = fs::read_to_string(fixture_dir("hello").join("transcript.jsonl"))
+        .expect("fixture transcript")
+        .lines()
+        .count();
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut seen_early = false;
-    while Instant::now() < deadline {
+    let mut seen_while_writing = false;
+    while Instant::now() < deadline && !seen_while_writing {
         if child.try_wait().expect("child status").is_some() {
             break;
         }
         let sessions = harness.boxr_home().join("sessions");
-        if let Ok(entries) = fs::read_dir(&sessions) {
-            for entry in entries.flatten() {
-                let path = entry.path().join("normalized.jsonl");
-                if let Ok(text) = fs::read_to_string(&path) {
-                    if text.contains("\"source\":\"user\"") {
-                        seen_early = true;
-                    }
-                }
+        for entry in fs::read_dir(&sessions).into_iter().flatten().flatten() {
+            let Ok(text) = fs::read_to_string(entry.path().join("normalized.jsonl")) else {
+                continue;
+            };
+            if text.contains("\"source\":\"user\"")
+                && !text.contains("\"final_metrics\"")
+                && harness.harness_transcript_lines() < fixture_lines
+            {
+                seen_while_writing = true;
             }
-        }
-        if seen_early {
-            break;
         }
         sleep(Duration::from_millis(20));
     }
@@ -535,8 +578,8 @@ fn steps_land_in_the_normalized_ledger_while_the_harness_is_still_writing() {
     let status = child.wait().expect("boxr finishes");
     assert_eq!(status.code(), Some(0));
     assert!(
-        seen_early,
-        "no normalized step appeared before the harness exited"
+        seen_while_writing,
+        "no normalized step appeared while the harness was still writing its transcript"
     );
 }
 
@@ -641,8 +684,9 @@ fn show_of_an_unknown_session_is_a_usage_error() {
 
 #[test]
 fn export_atif_writes_a_document_that_matches_the_schema() {
-    let harness = Harness::new();
-    let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    let launched = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
     let id = session_id_of(&stdout_of(&launched));
 
     let output = harness.run(&["export", "--atif", &id]);
@@ -659,13 +703,93 @@ fn export_atif_writes_a_document_that_matches_the_schema() {
     assert_valid_atif(&document);
     assert_eq!(document["session_id"], id.as_str());
     assert_eq!(document["extra"]["status"], "ok");
+    let observed = document["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .filter(|step| step["observation"].is_object())
+        .count();
+    assert_eq!(observed, 2, "{document}");
+}
+
+#[test]
+fn tool_results_fold_into_the_agent_step_that_called_them() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    let output = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    let steps = &lines[1..lines.len() - 1];
+    assert_valid_steps(steps);
+    let sources: Vec<&str> = steps
+        .iter()
+        .map(|step| step["source"].as_str().expect("source"))
+        .collect();
+    assert_eq!(
+        sources,
+        ["user", "agent", "agent", "agent", "agent", "agent"]
+    );
+    for (step, call_id, content) in [
+        (
+            &steps[2],
+            "toolu_fixture0000000001",
+            "default workflow live run",
+        ),
+        (
+            &steps[3],
+            "toolu_fixture0000000002",
+            "LIVE-DEFAULT-WORKFLOW.md",
+        ),
+    ] {
+        assert_eq!(step["tool_calls"][0]["tool_call_id"], call_id, "{step}");
+        let result = &step["observation"]["results"][0];
+        assert_eq!(result["source_call_id"], call_id, "{step}");
+        assert!(
+            result["content"]
+                .as_str()
+                .expect("content")
+                .contains(content),
+            "{step}"
+        );
+    }
+    assert!(steps[5]["message"]
+        .as_str()
+        .expect("message")
+        .contains("REVIEW-VERDICT: clean"));
+}
+
+#[test]
+fn a_reply_split_across_transcript_lines_counts_its_tokens_once() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    let output = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness, &session_id_of(&stdout));
+    assert_eq!(summary["steps"], 6);
+    assert_eq!(summary["promptTokens"], 25240 + 28999);
+    assert_eq!(summary["completionTokens"], 408 + 507);
+    assert_eq!(summary["cachedTokens"], 10023 + 25238);
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    let closing = &lines.last().expect("closing line")["final_metrics"];
+    assert_eq!(closing["total_prompt_tokens"], 25240 + 28999);
+    assert_eq!(closing["total_completion_tokens"], 408 + 507);
+    let with_metrics = lines
+        .iter()
+        .filter(|line| line["metrics"].is_object())
+        .count();
+    assert_eq!(with_metrics, 2, "{lines:?}");
 }
 
 #[test]
 fn a_harness_killed_mid_run_still_leaves_a_ledger_and_an_interrupted_summary() {
     let mut harness = Harness::new();
-    harness.kill_after(2);
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    harness.use_fixture("tools");
+    harness.kill_after(9);
+    let output = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(output.status.code(), Some(1), "{stdout}");
@@ -673,10 +797,15 @@ fn a_harness_killed_mid_run_still_leaves_a_ledger_and_an_interrupted_summary() {
 
     let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
     assert_eq!(lines[0]["schema_version"], "ATIF-v1.8");
-    assert!(
-        lines.last().expect("closing line")["final_metrics"].is_object(),
-        "{lines:?}"
-    );
+    let closing = &lines.last().expect("closing line")["final_metrics"];
+    let steps = &lines[1..lines.len() - 1];
+    assert_valid_steps(steps);
+    assert_eq!(closing["total_steps"], steps.len() as i64, "{lines:?}");
+    let unanswered = steps
+        .iter()
+        .filter(|step| step["tool_calls"].is_array() && step.get("observation").is_none())
+        .count();
+    assert_eq!(unanswered, 2, "{lines:?}");
 
     let summary = summary_of(&harness, &session_id_of(&stdout));
     assert_eq!(summary["status"], "interrupted");

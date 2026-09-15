@@ -1,5 +1,5 @@
-use super::{Harness, HarnessCommand, LaunchRequest, StreamEvent};
-use crate::atif::{Metrics, Observation, ObservationResult, Step, ToolCall};
+use super::{Harness, HarnessCommand, LaunchRequest, StreamEvent, TranscriptEntry};
+use crate::atif::{Metrics, ObservationResult, Step, ToolCall};
 use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
@@ -76,35 +76,37 @@ impl Harness for ClaudeCode {
         ))
     }
 
-    fn transcript_step(&self, line: &str) -> Option<Step> {
+    fn transcript_entry(&self, line: &str) -> Option<TranscriptEntry> {
         let value = serde_json::from_str::<Value>(line).ok()?;
         match value.get("type").and_then(Value::as_str) {
-            Some("user") => user_step(&value),
-            Some("assistant") => assistant_step(&value),
+            Some("user") => user_entry(&value),
+            Some("assistant") => assistant_entry(&value),
             _ => None,
         }
     }
 }
 
-fn user_step(value: &Value) -> Option<Step> {
+fn user_entry(value: &Value) -> Option<TranscriptEntry> {
     let content = value.get("message")?.get("content")?;
     let mut step = match content {
         Value::String(text) => Step::new("user", text.clone()),
         Value::Array(parts) => {
             let results = tool_results(parts);
-            let mut step = Step::new("user", joined_text(parts));
             if !results.is_empty() {
-                step.observation = Some(Observation { results });
+                return Some(TranscriptEntry::ToolResults(results));
             }
-            step
+            Step::new("user", joined_text(parts))
         }
         _ => return None,
     };
     step.timestamp = text_at(value, "timestamp");
-    Some(step)
+    Some(TranscriptEntry::Step {
+        step: Box::new(step),
+        response_id: None,
+    })
 }
 
-fn assistant_step(value: &Value) -> Option<Step> {
+fn assistant_entry(value: &Value) -> Option<TranscriptEntry> {
     let message = value.get("message")?;
     let parts = message.get("content")?.as_array()?;
     let mut step = Step::new("agent", joined_text(parts));
@@ -117,7 +119,10 @@ fn assistant_step(value: &Value) -> Option<Step> {
         step.tool_calls = Some(calls);
     }
     step.metrics = message.get("usage").and_then(metrics);
-    Some(step)
+    Some(TranscriptEntry::Step {
+        step: Box::new(step),
+        response_id: text_at(message, "id"),
+    })
 }
 
 fn joined_text(parts: &[Value]) -> String {
@@ -158,9 +163,11 @@ fn tool_results(parts: &[Value]) -> Vec<ObservationResult> {
     parts
         .iter()
         .filter(|part| part.get("type").and_then(Value::as_str) == Some("tool_result"))
-        .map(|part| ObservationResult {
-            source_call_id: text_at(part, "tool_use_id"),
-            content: result_content(part.get("content")),
+        .filter_map(|part| {
+            Some(ObservationResult {
+                source_call_id: text_at(part, "tool_use_id")?,
+                content: result_content(part.get("content")),
+            })
         })
         .collect()
 }
