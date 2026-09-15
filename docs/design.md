@@ -13,7 +13,7 @@ It follows the axi style: agent-first, short TOON output, and `help[]` lines tha
 
 Written in Rust.
 The tool is open source under Apache-2.0.
-All data is private and lives only in `~/.boxr` (or `%USERPROFILE%\.boxr` on Windows), never in the repo.
+All data is private and lives only in the boxr home, `~/.boxr` (or `%USERPROFILE%\.boxr` on Windows) unless the `BOXR_HOME` environment variable points elsewhere, never in the repo.
 There is no sync and no telemetry.
 
 ## Platforms
