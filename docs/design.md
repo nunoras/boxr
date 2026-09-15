@@ -78,8 +78,15 @@ Three layers per session:
 2. Normalized: JSONL where each line is one [ATIF](https://www.harborframework.com/docs/agents/trajectory-format) step object, plus a header line (session and agent info) and a closing line (final metrics).
    Our own fields (profile, subscription, effort, kind) go in ATIF `extra`.
    `boxr export --atif <id>` wraps the lines into a standard ATIF document.
+   ATIF requires at least one step, so exporting a session that recorded none is refused as a usage error rather than written as an invalid document.
 3. Summary: one line per session with harness, model, effort, profile, subscription, start, end, tokens, cost, status, kind and outcomes.
    All analytics query this layer.
+   Status is `ok` for a zero exit and `interrupted` when the harness was stopped from outside or by boxr itself: an external-stop signal (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGKILL`) on Unix, Ctrl-C or Ctrl-Break (`STATUS_CONTROL_C_EXIT`) on Windows, or a termination boxr caused on either platform.
+   A crash signal such as `SIGSEGV` or `SIGABRT` is not an interruption.
+   One narrow Windows exception: a forced kill by a third party (`taskkill /F`, `TerminateProcess`) exits with an ordinary code that cannot be told apart from a real failure, so it is recorded as `failed`.
+   Every other non-zero exit is `failed`, with or without a final result.
+   When boxr itself is asked to stop, it kills the harness, lets the transcript follower finish, writes the closing line and a summary marked `interrupted`, and only then exits.
+   That includes closing the console, logoff and shutdown on Windows, where boxr holds the console control event until the summary is written, within Windows' five second budget for those events.
 
 Storage is JSONL on disk.
 TOON is only the output shape when an agent reads through the CLI.
@@ -90,6 +97,18 @@ The main path is tailing the harness's transcript file live from launch to exit.
 Hooks are the backup, for a harness that does not flush while running or for events the transcript does not record, such as waiting on the user.
 Hooks are installed inside boxr's own profile directories, never in the user's normal harness setup.
 Importing old transcripts uses the same parsers.
+
+### Tool calls in the normalized layer
+
+Claude Code writes each content block of one model reply (thinking, text, each `tool_use`) as its own transcript line, and every one of those lines repeats the reply's usage.
+boxr maps each line to one agent step but counts a reply's usage once, on the first step it appears on.
+Claude Code redacts thinking to an empty body, so a line with no text, reasoning or tool calls produces no step, and the reply's usage lands on the step that carries its text or tool calls.
+Tool results arrive later on separate `type: user` lines.
+They cannot become their own steps: ATIF allows `observation` only on agent steps, and the Harbor validator rejects any observation whose `source_call_id` does not match a `tool_call_id` on the same step, so a later step cannot answer an earlier step's call.
+So an agent step that carries tool calls is held back until the results for all of its calls have arrived, then appended once with the results folded in as its `observation`.
+Steps without tool calls are appended immediately, and step ids follow append order.
+Liveness lags by tool duration for held steps, and every appended line stays a valid ATIF step.
+When the harness dies before a result arrives, the held step is appended without it before the closing line, so an interrupted session still has a complete, valid file.
 
 ### Secrets
 

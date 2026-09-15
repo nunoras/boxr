@@ -1,7 +1,9 @@
 pub mod claude;
 
+use crate::atif::{ObservationResult, Step};
 use anyhow::Result;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct LaunchRequest {
@@ -20,21 +22,37 @@ pub struct HarnessCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
-    SessionStarted { harness_session_id: String },
-    FinalMessage { text: String },
+    SessionStarted {
+        harness_session_id: String,
+        harness_version: Option<String>,
+        model: Option<String>,
+    },
+    FinalMessage {
+        text: String,
+    },
     Ignored,
 }
 
-pub trait Harness {
+#[derive(Debug, Clone)]
+pub enum TranscriptEntry {
+    Step {
+        step: Box<Step>,
+        response_id: Option<String>,
+    },
+    ToolResults(Vec<ObservationResult>),
+}
+
+pub trait Harness: Send + Sync {
     fn id(&self) -> &'static str;
     fn command(&self, request: &LaunchRequest) -> Result<HarnessCommand>;
     fn parse_event(&self, line: &str) -> StreamEvent;
     fn transcript(&self, harness_session_id: &str) -> Result<PathBuf>;
+    fn transcript_entry(&self, line: &str) -> Option<TranscriptEntry>;
 }
 
-pub fn lookup(id: &str) -> Option<Box<dyn Harness>> {
+pub fn lookup(id: &str) -> Option<Arc<dyn Harness>> {
     match id {
-        "claude" => Some(Box::new(claude::ClaudeCode)),
+        "claude" => Some(Arc::new(claude::ClaudeCode)),
         _ => None,
     }
 }
