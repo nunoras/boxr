@@ -122,6 +122,7 @@ fn login(harness: &dyn Harness, dir: &Path) -> Result<i32> {
         )
     })?;
 
+    ctrlc::set_handler(|| {}).context("leaving Ctrl-C to the login")?;
     let status = Command::new(&program)
         .args(&command.args)
         .envs(command.env.iter().map(|(key, value)| (key, value)))

@@ -89,12 +89,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let delay = Duration::from_millis(
-        env::var(DELAY_ENV)
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(5),
-    );
+    let delay = delay();
 
     let mut transcript_file = if env::var_os(NO_TRANSCRIPT_ENV).is_some() {
         None
@@ -158,6 +153,7 @@ fn login() -> ExitCode {
         eprintln!("cannot write the login marker: {error}");
         return ExitCode::from(97);
     }
+    sleep(delay());
 
     exit_code()
 }
@@ -166,6 +162,15 @@ fn echo_config_dir(config_dir: &std::path::Path) {
     if let Some(path) = env::var_os(CONFIG_OUT_ENV) {
         let _ = fs::write(PathBuf::from(path), config_dir.display().to_string());
     }
+}
+
+fn delay() -> Duration {
+    Duration::from_millis(
+        env::var(DELAY_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5),
+    )
 }
 
 fn exit_code() -> ExitCode {

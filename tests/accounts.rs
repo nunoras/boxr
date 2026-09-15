@@ -246,6 +246,44 @@ fn a_failed_login_on_an_existing_profile_keeps_it() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_login_cancelled_with_ctrl_c_leaves_no_profile() {
+    use std::os::unix::process::CommandExt;
+
+    let mut sandbox = Sandbox::new();
+    sandbox.delay_ms = "10000".to_string();
+    let mut child = sandbox
+        .command(
+            &["account", "add", "--harness", "claude", "--name", "work"],
+            &sandbox.config_out,
+        )
+        .process_group(0)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("boxr starts");
+
+    let marker = sandbox.account_dir("work").join("login.marker");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !marker.is_file() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the login never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let interrupted = Command::new("kill")
+        .args(["-s", "INT", "--", &format!("-{}", child.id())])
+        .status()
+        .expect("kill runs");
+    assert!(interrupted.success());
+
+    let status = child.wait().expect("boxr exits");
+    assert_eq!(status.code(), Some(1), "{status:?}");
+    assert!(!sandbox.account_dir("work").exists(), "no profile was left");
+}
+
 #[test]
 fn account_list_prints_profiles_as_toon() {
     let sandbox = Sandbox::new();
