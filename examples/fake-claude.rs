@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::thread::sleep;
@@ -9,6 +9,7 @@ use std::time::Duration;
 const FIXTURE_ENV: &str = "BOXR_FAKE_CLAUDE_FIXTURE";
 const EXIT_ENV: &str = "BOXR_FAKE_CLAUDE_EXIT";
 const ARGS_ENV: &str = "BOXR_FAKE_CLAUDE_ARGS";
+const PROMPT_ENV: &str = "BOXR_FAKE_CLAUDE_PROMPT";
 const DELAY_ENV: &str = "BOXR_FAKE_CLAUDE_DELAY_MS";
 const NO_TRANSCRIPT_ENV: &str = "BOXR_FAKE_CLAUDE_NO_TRANSCRIPT";
 
@@ -24,6 +25,22 @@ fn main() -> ExitCode {
         let args: Vec<String> = env::args().skip(1).collect();
         if let Err(error) = fs::write(PathBuf::from(path), args.join("\n")) {
             eprintln!("cannot record arguments: {error}");
+            return ExitCode::from(97);
+        }
+    }
+
+    let mut prompt = String::new();
+    if let Err(error) = std::io::stdin().read_to_string(&mut prompt) {
+        eprintln!("cannot read the prompt from stdin: {error}");
+        return ExitCode::from(97);
+    }
+    if prompt.is_empty() {
+        eprintln!("Error: Input must be provided either through stdin or as a prompt argument when using --print");
+        return ExitCode::from(1);
+    }
+    if let Some(path) = env::var_os(PROMPT_ENV) {
+        if let Err(error) = fs::write(PathBuf::from(path), &prompt) {
+            eprintln!("cannot record the prompt: {error}");
             return ExitCode::from(97);
         }
     }

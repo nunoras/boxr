@@ -6,6 +6,7 @@ struct Harness {
     root: tempfile::TempDir,
     bin_dir: PathBuf,
     args_file: PathBuf,
+    prompt_file: PathBuf,
     exit_code: String,
     withhold_transcript: bool,
 }
@@ -18,10 +19,12 @@ impl Harness {
         fs::create_dir_all(root.path().join("work")).expect("work dir");
         fs::create_dir_all(root.path().join("claude")).expect("claude config dir");
         fs::copy(fake_claude(), bin_dir.join(fake_name())).expect("install fake claude");
+        let prompt_file = root.path().join("claude-prompt.txt");
         Harness {
             root,
             bin_dir,
             args_file: PathBuf::new(),
+            prompt_file,
             exit_code: "0".to_string(),
             withhold_transcript: false,
         }
@@ -49,6 +52,24 @@ impl Harness {
             .collect()
     }
 
+    fn recorded_prompt(&self) -> String {
+        fs::read_to_string(&self.prompt_file).expect("recorded prompt")
+    }
+
+    #[cfg(windows)]
+    fn install_cmd_shim(&self) {
+        fs::remove_file(self.bin_dir.join(fake_name())).expect("remove fake claude.exe");
+        let tools = self.root.path().join("tools");
+        fs::create_dir_all(&tools).expect("tools dir");
+        let fake = tools.join("fake-claude.exe");
+        fs::copy(fake_claude(), &fake).expect("install fake claude outside PATH");
+        fs::write(
+            self.bin_dir.join("claude.cmd"),
+            format!("@\"{}\" %*\r\n", fake.display()),
+        )
+        .expect("claude.cmd shim");
+    }
+
     fn fail_with(&mut self, code: &str) {
         self.exit_code = code.to_string();
     }
@@ -71,6 +92,7 @@ impl Harness {
             .env("BOXR_FAKE_CLAUDE_FIXTURE", fixture_dir())
             .env("BOXR_FAKE_CLAUDE_EXIT", &self.exit_code)
             .env("BOXR_FAKE_CLAUDE_DELAY_MS", "5")
+            .env("BOXR_FAKE_CLAUDE_PROMPT", &self.prompt_file)
             .env(
                 "PATH",
                 bin_dir
@@ -275,6 +297,7 @@ fn a_harness_missing_from_path_is_its_own_exit_code() {
 
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stderr.contains("was not found on PATH"), "{stderr}");
+    assert!(!harness.boxr_home().join("sessions").exists());
 }
 
 #[test]
@@ -304,24 +327,54 @@ fn a_prompt_starting_with_a_dash_reaches_claude_as_the_prompt() {
         stderr_of(&output)
     );
 
+    assert_eq!(harness.recorded_prompt(), "-h");
     let args = harness.recorded_args();
-    assert_eq!(args[args.len() - 2..], ["--", "-h"], "{args:?}");
+    assert!(!args.contains(&"-h".to_string()), "{args:?}");
+}
+
+fn assert_prompt_reaches_claude_intact(harness: &Harness, prompt: &str) {
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", prompt]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(
+        harness.recorded_prompt() == prompt,
+        "the prompt changed on the way"
+    );
+}
+
+#[test]
+fn a_multi_line_prompt_reaches_claude_intact() {
+    let harness = Harness::new();
+    #[cfg(windows)]
+    harness.install_cmd_shim();
+    assert_prompt_reaches_claude_intact(
+        &harness,
+        "first line\nsecond line with \"quotes\" & %PATH%\r\nthird line\n",
+    );
+}
+
+#[test]
+fn a_prompt_longer_than_the_cmd_line_limit_reaches_claude_intact() {
+    let harness = Harness::new();
+    #[cfg(windows)]
+    harness.install_cmd_shim();
+    let prompt = "boxr long prompt ".repeat(600);
+    assert!(prompt.len() > 8191);
+    assert_prompt_reaches_claude_intact(&harness, &prompt);
 }
 
 #[cfg(windows)]
 #[test]
 fn a_cmd_shim_on_path_launches_claude() {
     let harness = Harness::new();
-    fs::remove_file(harness.bin_dir.join(fake_name())).expect("remove fake claude.exe");
-    let tools = harness.root.path().join("tools");
-    fs::create_dir_all(&tools).expect("tools dir");
-    let fake = tools.join("fake-claude.exe");
-    fs::copy(fake_claude(), &fake).expect("install fake claude outside PATH");
-    fs::write(
-        harness.bin_dir.join("claude.cmd"),
-        format!("@\"{}\" %*\r\n", fake.display()),
-    )
-    .expect("claude.cmd shim");
+    harness.install_cmd_shim();
 
     let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
     let stdout = stdout_of(&output);
