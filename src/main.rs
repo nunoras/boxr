@@ -9,6 +9,7 @@ mod skill;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use std::ffi::OsStr;
 use config::Config;
 use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
 use harness::LaunchRequest;
@@ -26,9 +27,6 @@ const MESSAGE_LIMIT: usize = 200;
     disable_help_subcommand = true
 )]
 struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-
     #[arg(long, value_name = "HARNESS")]
     harness: Option<String>,
 
@@ -42,13 +40,20 @@ struct Cli {
     prompt: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+#[command(name = "boxr", disable_help_subcommand = true)]
+struct SkillCli {
+    #[command(subcommand)]
+    command: SkillCommand,
+}
+
 #[derive(Subcommand, Debug)]
-enum Command {
-    Skill(SkillCommand),
+enum SkillCommand {
+    Skill(SkillNamespace),
 }
 
 #[derive(Args, Debug)]
-struct SkillCommand {
+struct SkillNamespace {
     #[command(subcommand)]
     command: SkillAction,
 }
@@ -57,7 +62,7 @@ struct SkillCommand {
 enum SkillAction {
     Install {
         #[arg(long, value_name = "HARNESS")]
-        harness: Option<String>,
+        harness: String,
     },
 }
 
@@ -69,13 +74,21 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<i32> {
-    let cli = Cli::parse();
-    match &cli.command {
-        Some(Command::Skill(SkillCommand {
-            command: SkillAction::Install { harness },
-        })) => skill_install(harness.as_deref().unwrap_or("all")),
-        None => launch(cli),
+    if is_skill_install_command() {
+        let cli = SkillCli::parse();
+        return match cli.command {
+            SkillCommand::Skill(SkillNamespace {
+                command: SkillAction::Install { harness },
+            }) => skill_install(&harness),
+        };
     }
+    launch(Cli::parse())
+}
+
+fn is_skill_install_command() -> bool {
+    let mut args = std::env::args_os().skip(1);
+    args.next().as_deref() == Some(OsStr::new("skill"))
+        && args.next().as_deref() == Some(OsStr::new("install"))
 }
 
 fn skill_install(harness: &str) -> Result<i32> {
@@ -103,7 +116,7 @@ fn render_skill_install(installed: &[skill::Installed]) -> String {
         .map(|item| {
             vec![
                 format!("Read the skill at {}", item.dir.join("SKILL.md").display()),
-                "Run `boxr skill install` to update every harness".to_string(),
+                "Run `boxr skill install --harness all` to update every harness".to_string(),
             ]
         })
         .unwrap_or_default();

@@ -318,6 +318,21 @@ fn an_unrecorded_transcript_is_a_ledger_failure_with_its_own_exit_code() {
     assert!(!session_dir(&harness).join("raw/transcript.jsonl").exists());
 }
 
+#[test]
+fn skill_is_forwarded_as_a_literal_prompt() {
+    let mut harness = Harness::new();
+    harness.record_args();
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "skill"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert_eq!(harness.recorded_prompt(), "skill");
+}
+
 fn assert_prompt_reaches_claude_intact(harness: &Harness, prompt: &str) {
     let output = harness.run(&["--harness", "claude", "--model", "sonnet", prompt]);
     let stdout = stdout_of(&output);

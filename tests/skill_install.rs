@@ -106,7 +106,7 @@ fn a_config_dir_override_moves_the_claude_skill_directory() {
 #[test]
 fn all_installs_into_every_supported_harness() {
     let sandbox = Sandbox::new();
-    let output = sandbox.run(&["skill", "install"]);
+    let output = sandbox.run(&["skill", "install", "--harness", "all"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(
@@ -133,7 +133,7 @@ fn codex_and_pi_honour_their_config_dir_overrides() {
     let codex = sandbox.dir("codex-home");
     let pi = sandbox.dir("pi-agent");
     let output = sandbox
-        .command(&["skill", "install"])
+        .command(&["skill", "install", "--harness", "all"])
         .env("CODEX_HOME", &codex)
         .env("PI_CODING_AGENT_DIR", &pi)
         .output()
@@ -194,6 +194,17 @@ fn reinstalling_replaces_the_previous_version_without_duplicates() {
         .collect();
     assert_eq!(contents, vec!["SKILL.md".to_string()], "{contents:?}");
     assert!(skill_body(&skills.join("boxr-prompts/SKILL.md")).contains("name: boxr-prompts"));
+}
+
+#[test]
+fn a_harness_is_required() {
+    let sandbox = Sandbox::new();
+    let output = sandbox.run(&["skill", "install"]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("required"), "{stderr}");
+    assert!(!sandbox.root.path().join(".claude").exists());
 }
 
 #[test]

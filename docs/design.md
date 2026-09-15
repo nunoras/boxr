@@ -169,7 +169,7 @@ It ships in this repo and installs with `boxr skill install --harness claude|cod
 ## Skills
 
 Bundled skills live under `skills/<name>/` in this repo and are embedded in the binary at build time.
-`boxr skill install --harness claude|codex|pi|all` writes each bundled skill into that harness's user-level skill directory, and omitting `--harness` covers every supported harness.
+`boxr skill install --harness claude|codex|pi|all` writes each bundled skill into the selected harness's user-level skill directory.
 A reinstall deletes the skill directory and writes it again, so an update leaves no stale files and no duplicates.
 The bundled list in `src/skill.rs` is a list of named skills, each with its own files, and each installs into its own `skills/<name>/` directory, so skills cannot overwrite each other.
 A new bundled skill is one more `skills/<name>/` folder plus one named entry in that list, and it needs no adapter: only the harness's skill directory, not its launch adapter.
