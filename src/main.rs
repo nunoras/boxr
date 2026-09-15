@@ -8,7 +8,7 @@ mod session;
 mod skill;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use config::Config;
 use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
 use harness::LaunchRequest;
@@ -26,11 +26,8 @@ const MESSAGE_LIMIT: usize = 200;
     disable_help_subcommand = true
 )]
 struct Cli {
-    #[arg(short = 'i', value_name = "INSTALL")]
-    install: Option<String>,
-
-    #[arg(long = "p", value_name = "PROMPT", allow_hyphen_values = true)]
-    prompt: Option<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
 
     #[arg(long, value_name = "HARNESS")]
     harness: Option<String>,
@@ -40,6 +37,28 @@ struct Cli {
 
     #[arg(long, value_name = "EFFORT")]
     effort: Option<String>,
+
+    #[arg(value_name = "PROMPT")]
+    prompt: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    Skill(SkillCommand),
+}
+
+#[derive(Args, Debug)]
+struct SkillCommand {
+    #[command(subcommand)]
+    command: SkillAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillAction {
+    Install {
+        #[arg(long, value_name = "HARNESS")]
+        harness: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -51,17 +70,12 @@ fn main() -> ExitCode {
 
 fn run() -> Result<i32> {
     let cli = Cli::parse();
-    if let Some(install) = &cli.install {
-        if install != "skills" {
-            return Err(Fail::usage(
-                format!("unknown install target `{install}`"),
-                vec!["Use `boxr -i skills` to install bundled skills".to_string()],
-            )
-            .into());
-        }
-        return skill_install(cli.harness.as_deref().unwrap_or("all"));
+    match &cli.command {
+        Some(Command::Skill(SkillCommand {
+            command: SkillAction::Install { harness },
+        })) => skill_install(harness.as_deref().unwrap_or("all")),
+        None => launch(cli),
     }
-    launch(cli)
 }
 
 fn skill_install(harness: &str) -> Result<i32> {
@@ -89,7 +103,7 @@ fn render_skill_install(installed: &[skill::Installed]) -> String {
         .map(|item| {
             vec![
                 format!("Read the skill at {}", item.dir.join("SKILL.md").display()),
-                "Run `boxr -i skills` to update every harness".to_string(),
+                "Run `boxr skill install` to update every harness".to_string(),
             ]
         })
         .unwrap_or_default();
@@ -101,7 +115,7 @@ fn launch(cli: Cli) -> Result<i32> {
     let prompt = cli.prompt.clone().ok_or_else(|| {
         Fail::usage(
             "no prompt given",
-            vec!["Pass the prompt with `--p \"<prompt>\"`".to_string()],
+            vec!["Run `boxr --harness claude --model <m> \"<prompt>\"`".to_string()],
         )
     })?;
 

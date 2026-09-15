@@ -64,7 +64,7 @@ fn skill_body(path: &PathBuf) -> String {
 #[test]
 fn claude_installs_into_the_user_skill_directory_under_the_test_home() {
     let sandbox = Sandbox::new();
-    let output = sandbox.run(&["-i", "skills", "--harness", "claude"]);
+    let output = sandbox.run(&["skill", "install", "--harness", "claude"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(
@@ -88,7 +88,7 @@ fn a_config_dir_override_moves_the_claude_skill_directory() {
     let sandbox = Sandbox::new();
     let config = sandbox.dir("claude-config");
     let output = sandbox
-        .command(&["-i", "skills", "--harness", "claude"])
+        .command(&["skill", "install", "--harness", "claude"])
         .env("CLAUDE_CONFIG_DIR", &config)
         .output()
         .expect("boxr runs");
@@ -106,7 +106,7 @@ fn a_config_dir_override_moves_the_claude_skill_directory() {
 #[test]
 fn all_installs_into_every_supported_harness() {
     let sandbox = Sandbox::new();
-    let output = sandbox.run(&["-i", "skills"]);
+    let output = sandbox.run(&["skill", "install"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(
@@ -133,7 +133,7 @@ fn codex_and_pi_honour_their_config_dir_overrides() {
     let codex = sandbox.dir("codex-home");
     let pi = sandbox.dir("pi-agent");
     let output = sandbox
-        .command(&["-i", "skills"])
+        .command(&["skill", "install"])
         .env("CODEX_HOME", &codex)
         .env("PI_CODING_AGENT_DIR", &pi)
         .output()
@@ -154,7 +154,7 @@ fn codex_and_pi_honour_their_config_dir_overrides() {
 #[test]
 fn reinstalling_replaces_the_previous_version_without_duplicates() {
     let sandbox = Sandbox::new();
-    sandbox.run(&["-i", "skills", "--harness", "claude"]);
+    sandbox.run(&["skill", "install", "--harness", "claude"]);
     let skills = sandbox.root.path().join(".claude/skills");
     fs::write(
         skills.join("boxr-prompts/stale.md"),
@@ -162,7 +162,7 @@ fn reinstalling_replaces_the_previous_version_without_duplicates() {
     )
     .expect("stale file");
 
-    let output = sandbox.run(&["-i", "skills", "--harness", "claude"]);
+    let output = sandbox.run(&["skill", "install", "--harness", "claude"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -199,7 +199,7 @@ fn reinstalling_replaces_the_previous_version_without_duplicates() {
 #[test]
 fn an_unknown_harness_is_a_usage_error() {
     let sandbox = Sandbox::new();
-    let output = sandbox.run(&["-i", "skills", "--harness", "gemini"]);
+    let output = sandbox.run(&["skill", "install", "--harness", "gemini"]);
     let stderr = stderr_of(&output);
 
     assert_eq!(output.status.code(), Some(2), "{stderr}");
