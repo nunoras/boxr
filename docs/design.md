@@ -80,6 +80,8 @@ Three layers per session:
    `boxr export --atif <id>` wraps the lines into a standard ATIF document.
 3. Summary: one line per session with harness, model, effort, profile, subscription, start, end, tokens, cost, status, kind and outcomes.
    All analytics query this layer.
+   Status is `ok` for a zero exit, `interrupted` when the harness was killed by a signal or stopped by boxr, and `failed` for any other non-zero exit, with or without a final result.
+   Windows has no signals, so a harness killed there is recorded as `failed`.
 
 Storage is JSONL on disk.
 TOON is only the output shape when an agent reads through the CLI.
@@ -95,6 +97,7 @@ Importing old transcripts uses the same parsers.
 
 Claude Code writes each content block of one model reply (thinking, text, each `tool_use`) as its own transcript line, and every one of those lines repeats the reply's usage.
 boxr maps each line to one agent step but counts a reply's usage once, on the first step it appears on.
+Claude Code redacts thinking to an empty body, so a line with no text, reasoning or tool calls produces no step, and the reply's usage lands on the step that carries its text or tool calls.
 Tool results arrive later on separate `type: user` lines.
 They cannot become their own steps: ATIF allows `observation` only on agent steps, and the Harbor validator rejects any observation whose `source_call_id` does not match a `tool_call_id` on the same step, so a later step cannot answer an earlier step's call.
 So an agent step that carries tool calls is held back until the results for all of its calls have arrived, then appended once with the results folded in as its `observation`.

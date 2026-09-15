@@ -110,14 +110,17 @@ fn assistant_entry(value: &Value) -> Option<TranscriptEntry> {
     let message = value.get("message")?;
     let parts = message.get("content")?.as_array()?;
     let mut step = Step::new("agent", joined_text(parts));
-    step.timestamp = text_at(value, "timestamp");
-    step.model_name = text_at(message, "model");
-    step.reasoning_effort = text_at(value, "effort");
     step.reasoning_content = reasoning(parts);
     let calls = tool_calls(parts);
     if !calls.is_empty() {
         step.tool_calls = Some(calls);
     }
+    if step.message.is_empty() && step.reasoning_content.is_none() && step.tool_calls.is_none() {
+        return None;
+    }
+    step.timestamp = text_at(value, "timestamp");
+    step.model_name = text_at(message, "model");
+    step.reasoning_effort = text_at(value, "effort");
     step.metrics = message.get("usage").and_then(metrics);
     Some(TranscriptEntry::Step {
         step: Box::new(step),

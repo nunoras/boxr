@@ -374,20 +374,18 @@ pub struct Summary {
     pub cached_tokens: u64,
 }
 
-pub fn append_summary(home: &Path, summary: &Summary) -> Result<PathBuf> {
-    let path = home.join(SUMMARY_FILE);
+pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
     let line = serde_json::to_string(summary).context("encoding the session summary")?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("opening {}", path.display()))?;
-    restrict_file(&path)?;
+    restrict_file(path)?;
     file.write_all(line.as_bytes())
         .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.flush())
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(path)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 pub fn read_summary(home: &Path, id: &str) -> Result<Summary> {

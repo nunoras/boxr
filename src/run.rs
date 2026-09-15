@@ -9,7 +9,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -28,6 +28,7 @@ pub struct Outcome {
     pub tally: Tally,
     pub summary: Summary,
     pub summary_path: PathBuf,
+    pub summary_error: Option<String>,
 }
 
 impl Outcome {
@@ -187,14 +188,17 @@ pub fn headless(
         start: iso8601(started_at),
         end: iso8601(ended_at),
         duration_ms: duration_ms as u64,
-        status: status_of(exit_code, final_message.is_some()).to_string(),
+        status: status_of(&status).to_string(),
         exit_code,
         steps: tally.steps,
         prompt_tokens: tally.prompt_tokens,
         completion_tokens: tally.completion_tokens,
         cached_tokens: tally.cached_tokens,
     };
-    let summary_path = ledger::append_summary(home, &summary)?;
+    let summary_path = home.join(ledger::SUMMARY_FILE);
+    let summary_error = ledger::append_summary(&summary_path, &summary)
+        .err()
+        .map(|error| format!("{error:#}"));
 
     Ok(Outcome {
         session,
@@ -206,14 +210,15 @@ pub fn headless(
         tally,
         summary,
         summary_path,
+        summary_error,
     })
 }
 
-fn status_of(exit_code: i32, has_final_message: bool) -> &'static str {
-    match (exit_code, has_final_message) {
-        (0, _) => "ok",
-        (_, true) => "failed",
-        (_, false) => "interrupted",
+fn status_of(status: &ExitStatus) -> &'static str {
+    match (status.success(), signal_of(status)) {
+        (true, _) => "ok",
+        (false, Some(_)) => "interrupted",
+        (false, None) => "failed",
     }
 }
 
@@ -288,17 +293,20 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
-    status.code().unwrap_or_else(|| signal_exit_code(status))
+fn exit_code_of(status: &ExitStatus) -> i32 {
+    status
+        .code()
+        .or_else(|| signal_of(status).map(|signal| 128 + signal))
+        .unwrap_or(1)
 }
 
 #[cfg(unix)]
-fn signal_exit_code(status: &std::process::ExitStatus) -> i32 {
+fn signal_of(status: &ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
-    status.signal().map(|signal| 128 + signal).unwrap_or(1)
+    status.signal()
 }
 
 #[cfg(not(unix))]
-fn signal_exit_code(_status: &std::process::ExitStatus) -> i32 {
-    1
+fn signal_of(_status: &ExitStatus) -> Option<i32> {
+    None
 }

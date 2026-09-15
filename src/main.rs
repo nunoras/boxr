@@ -196,8 +196,9 @@ fn launch(cli: Cli) -> Result<i32> {
 
     print!("{}", render(adapter.id(), &request, &outcome));
 
-    let ledger_failed =
-        matches!(outcome.ledger, Ledger::Failed(_)) || outcome.tally.error.is_some();
+    let ledger_failed = matches!(outcome.ledger, Ledger::Failed(_))
+        || outcome.tally.error.is_some()
+        || outcome.summary_error.is_some();
     Ok(match (outcome.succeeded(), ledger_failed) {
         (false, _) => EXIT_SESSION_FAILED,
         (true, true) => EXIT_LEDGER_FAILED,
@@ -244,6 +245,9 @@ fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> 
     if let Some(error) = &outcome.tally.error {
         ledger.field("captureError", &one_line(error, MESSAGE_LIMIT));
     }
+    if let Some(error) = &outcome.summary_error {
+        ledger.field("summaryError", &one_line(error, MESSAGE_LIMIT));
+    }
     let raw = toon
         .section("raw")
         .field("dir", &session.raw_dir().display().to_string())
@@ -262,10 +266,14 @@ fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> 
     };
 
     let help = if outcome.succeeded() {
-        vec![
-            record_line,
-            format!("Run `boxr show {}` to read the session summary", session.id),
-        ]
+        let mut lines = vec![record_line];
+        if outcome.summary_error.is_none() {
+            lines.push(format!(
+                "Run `boxr show {}` to read the session summary",
+                session.id
+            ));
+        }
+        lines
     } else {
         vec![
             format!(
