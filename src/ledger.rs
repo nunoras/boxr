@@ -375,7 +375,8 @@ pub struct Summary {
 }
 
 pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
-    let line = serde_json::to_string(summary).context("encoding the session summary")?;
+    let mut line = serde_json::to_string(summary).context("encoding the session summary")?;
+    line.push('\n');
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -383,7 +384,6 @@ pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
         .with_context(|| format!("opening {}", path.display()))?;
     restrict_file(path)?;
     file.write_all(line.as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.flush())
         .with_context(|| format!("writing {}", path.display()))
 }
