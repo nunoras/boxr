@@ -36,12 +36,20 @@ pub fn validate_name(name: &str) -> Result<()> {
     .into())
 }
 
-pub fn create(home: &Path, harness_id: &str, name: &str) -> Result<(PathBuf, bool)> {
+pub fn add(harness: &dyn Harness, home: &Path, name: &str) -> Result<(PathBuf, bool)> {
     validate_name(name)?;
-    let dir = profile_dir(home, harness_id, name);
+    let dir = profile_dir(home, harness.id(), name);
     let existed = dir.is_dir();
     create_private_dir(&dir)?;
-    Ok((dir, existed))
+
+    let login = login(harness, &dir);
+    if !existed && !matches!(login, Ok(0)) {
+        fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+    }
+    match login? {
+        0 => Ok((dir, existed)),
+        code => Err(login_failure(harness.id(), name, code, existed)),
+    }
 }
 
 pub fn resolve(home: &Path, harness_id: &str, name: &str) -> Result<PathBuf> {
@@ -98,7 +106,7 @@ pub fn remove(home: &Path, harness_id: &str, name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-pub fn login(harness: &dyn Harness, dir: &Path) -> Result<i32> {
+fn login(harness: &dyn Harness, dir: &Path) -> Result<i32> {
     let mut command = harness.login_command()?;
     apply_config_dir(&mut command, harness, Some(dir));
     let program = run::locate(&command.program).ok_or_else(|| {
@@ -126,16 +134,19 @@ pub fn login(harness: &dyn Harness, dir: &Path) -> Result<i32> {
     Ok(run::exit_code_of(&status))
 }
 
-pub fn login_failure(harness_id: &str, name: &str, code: i32) -> anyhow::Error {
+fn login_failure(harness_id: &str, name: &str, code: i32, kept_profile: bool) -> anyhow::Error {
+    let mut help = vec![format!(
+        "Run `boxr account add --harness {harness_id} --name {name}` to try again"
+    )];
+    if kept_profile {
+        help.push(format!(
+            "Run `boxr account remove --harness {harness_id} --name {name} --yes` to delete the profile"
+        ));
+    }
     Fail {
         code: EXIT_SESSION_FAILED,
         message: format!("{harness_id} login for account `{name}` failed with exit code {code}"),
-        help: vec![
-            format!("Run `boxr account add --harness {harness_id} --name {name}` to try again"),
-            format!(
-                "Run `boxr account remove --harness {harness_id} --name {name} --yes` to delete the profile"
-            ),
-        ],
+        help,
     }
     .into()
 }

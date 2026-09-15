@@ -60,6 +60,7 @@ impl Sandbox {
             .env("HOME", &self.user_home)
             .env("USERPROFILE", &self.user_home)
             .env("PATH", &self.bin_dir)
+            .env_remove("CLAUDE_CONFIG_DIR")
             .env("BOXR_FAKE_CLAUDE_FIXTURE", fixture_dir())
             .env("BOXR_FAKE_CLAUDE_EXIT", &self.exit_code)
             .env("BOXR_FAKE_CLAUDE_DELAY_MS", &self.delay_ms)
@@ -207,7 +208,7 @@ fn adding_an_existing_profile_runs_the_login_again() {
 }
 
 #[test]
-fn a_failed_login_is_a_clear_error() {
+fn a_failed_login_is_a_clear_error_and_leaves_no_profile() {
     let mut sandbox = Sandbox::new();
     sandbox.exit_code = "4".to_string();
     let output = sandbox.run(&["account", "add", "--harness", "claude", "--name", "work"]);
@@ -218,7 +219,31 @@ fn a_failed_login_is_a_clear_error() {
         stderr.contains("login for account `work` failed with exit code 4"),
         "{stderr}"
     );
+    assert!(stderr.contains("help[1]:"), "{stderr}");
+    assert!(!sandbox.account_dir("work").exists(), "no profile was left");
+
+    let listed = stdout_of(&sandbox.run(&["account", "list"]));
+    assert!(
+        listed.contains("accounts[0]{harness,name,dir}:"),
+        "{listed}"
+    );
+}
+
+#[test]
+fn a_failed_login_on_an_existing_profile_keeps_it() {
+    let mut sandbox = Sandbox::new();
+    add_profile(&sandbox, "work");
+    sandbox.exit_code = "4".to_string();
+    let output = sandbox.run(&["account", "add", "--harness", "claude", "--name", "work"]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("help[2]:"), "{stderr}");
+    assert!(stderr.contains("boxr account remove"), "{stderr}");
+    assert!(
+        sandbox.account_dir("work").join("login.marker").is_file(),
+        "the existing profile was kept"
+    );
 }
 
 #[test]
@@ -323,6 +348,27 @@ fn account_remove_of_an_unknown_profile_points_at_list() {
         "{stderr}"
     );
     assert!(stderr.contains("boxr account list"), "{stderr}");
+}
+
+#[test]
+fn account_remove_with_an_unknown_harness_deletes_nothing() {
+    let sandbox = Sandbox::new();
+    add_profile(&sandbox, "work");
+    for (harness, name) in [("..", "accounts"), ("", "claude"), ("../..", "boxr")] {
+        let output = sandbox.run(&[
+            "account",
+            "remove",
+            "--harness",
+            harness,
+            "--name",
+            name,
+            "--yes",
+        ]);
+        let stderr = stderr_of(&output);
+        assert_eq!(output.status.code(), Some(2), "{harness}: {stderr}");
+        assert!(stderr.contains("unknown harness"), "{harness}: {stderr}");
+    }
+    assert!(sandbox.account_dir("work").is_dir(), "the profile survived");
 }
 
 #[test]

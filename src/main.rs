@@ -216,15 +216,7 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
     let effort = cli.effort.or(config.defaults.effort.clone());
     let account = cli.account.or(config.defaults.account.clone());
 
-    let adapter = harness::lookup(&harness_id).ok_or_else(|| {
-        Fail::usage(
-            format!("unknown harness `{harness_id}`"),
-            vec![format!(
-                "Known harnesses: {}",
-                harness::known_ids().join(", ")
-            )],
-        )
-    })?;
+    let adapter = adapter_for(&harness_id)?;
 
     let profile = match &account {
         Some(name) => Some(profile_for(adapter.as_ref(), home, &harness_id, name)?),
@@ -271,15 +263,7 @@ fn account_add(args: &AccountAdd, home: &Path, config: &Config) -> Result<i32> {
         config.defaults.harness.clone(),
         home,
     )?;
-    let adapter = harness::lookup(&harness_id).ok_or_else(|| {
-        Fail::usage(
-            format!("unknown harness `{harness_id}`"),
-            vec![format!(
-                "Known harnesses: {}",
-                harness::known_ids().join(", ")
-            )],
-        )
-    })?;
+    let adapter = adapter_for(&harness_id)?;
     if adapter.config_dir_env().is_none() {
         return Err(Fail::usage(
             format!("harness `{harness_id}` cannot isolate its config directory"),
@@ -288,11 +272,7 @@ fn account_add(args: &AccountAdd, home: &Path, config: &Config) -> Result<i32> {
         .into());
     }
 
-    let (dir, existed) = account::create(home, &harness_id, &args.name)?;
-    let code = account::login(adapter.as_ref(), &dir)?;
-    if code != 0 {
-        return Err(account::login_failure(&harness_id, &args.name, code));
-    }
+    let (dir, existed) = account::add(adapter.as_ref(), home, &args.name)?;
 
     let mut toon = Toon::new();
     toon.section("account")
@@ -349,6 +329,7 @@ fn account_remove(args: &AccountRemove, home: &Path, config: &Config) -> Result<
         config.defaults.harness.clone(),
         home,
     )?;
+    adapter_for(&harness_id)?;
     if !args.yes {
         return Err(Fail::usage(
             format!("removing account `{}` needs confirmation", args.name),
@@ -376,6 +357,19 @@ fn account_remove(args: &AccountRemove, home: &Path, config: &Config) -> Result<
     );
     print!("{}", toon.render());
     Ok(EXIT_OK)
+}
+
+fn adapter_for(harness_id: &str) -> Result<std::sync::Arc<dyn harness::Harness>> {
+    harness::lookup(harness_id).ok_or_else(|| {
+        Fail::usage(
+            format!("unknown harness `{harness_id}`"),
+            vec![format!(
+                "Known harnesses: {}",
+                harness::known_ids().join(", ")
+            )],
+        )
+        .into()
+    })
 }
 
 fn profile_for(
