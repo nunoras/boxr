@@ -10,9 +10,17 @@ boxr does two jobs.
 It launches agents across harnesses and isolated account profiles.
 It keeps a local ledger of every session, so you can see which models you use for what, where tokens go, and test prompt changes against real scenarios instead of guessing.
 
-Status: design.
-Nothing is built yet.
+Status: walking skeleton.
+Headless Claude Code launches run and land in the raw ledger under the boxr home (`~/.boxr`, or `BOXR_HOME` when set).
+Everything else in the design is still ahead.
 The design lives in [docs/design.md](docs/design.md).
+
+## Build
+
+```
+cargo build --release
+cargo test
+```
 
 ## License
 
