@@ -332,6 +332,21 @@ fn a_prompt_starting_with_a_dash_reaches_claude_as_the_prompt() {
     assert!(!args.contains(&"-h".to_string()), "{args:?}");
 }
 
+#[test]
+fn skill_is_forwarded_as_a_literal_prompt() {
+    let mut harness = Harness::new();
+    harness.record_args();
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "skill"]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert_eq!(harness.recorded_prompt(), "skill");
+}
+
 fn assert_prompt_reaches_claude_intact(harness: &Harness, prompt: &str) {
     let output = harness.run(&["--harness", "claude", "--model", "sonnet", prompt]);
     let stdout = stdout_of(&output);

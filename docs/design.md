@@ -166,6 +166,25 @@ It reads the user's prompts, describes their typical style, proposes one specifi
 Every claim it makes must come from CLI output.
 It ships in this repo and installs with `boxr skill install --harness claude|codex|pi|all`.
 
+## Skills
+
+Bundled skills live under `skills/<name>/` in this repo and are embedded in the binary at build time.
+`boxr skill install --harness claude|codex|pi|all` writes each bundled skill into the selected harness's user-level skill directory.
+A reinstall deletes the skill directory and writes it again, so an update leaves no stale files and no duplicates.
+The bundled list in `src/skill.rs` is a list of named skills, each with its own files, and each installs into its own `skills/<name>/` directory, so skills cannot overwrite each other.
+A new bundled skill is one more `skills/<name>/` folder plus one named entry in that list, and it needs no adapter: only the harness's skill directory, not its launch adapter.
+Repo-local project skills, such as `verify-boxr` under `.claude/skills/`, are not bundled and are not installed by this command.
+
+Each harness resolves its config directory from its own override environment variable, falling back to the user home, and each skill sits under `skills/` inside it.
+
+| harness | config dir override | default config dir | user skill directory |
+|---|---|---|---|
+| Claude Code | `CLAUDE_CONFIG_DIR` | `~/.claude` | `<config>/skills/<name>` |
+| Codex | `CODEX_HOME` | `~/.codex` | `<config>/skills/<name>` |
+| pi | `PI_CODING_AGENT_DIR` | `~/.pi/agent` | `<config>/skills/<name>` |
+
+Confirmed on 2026-09-15 from each tool's own docs or shipped files: Claude Code documents personal skills at `~/.claude/skills/<name>/SKILL.md`, Codex's shipped `skill-installer` skill names `$CODEX_HOME/skills` with default `~/.codex/skills`, and pi documents global skills at `~/.pi/agent/skills/`.
+
 ## Milestones
 
 1. Launch and ledger: headless and interactive, isolated profiles, subscriptions, live tailing into raw, ATIF JSONL and summary layers, redaction.

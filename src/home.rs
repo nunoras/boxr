@@ -35,6 +35,13 @@ pub fn user_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+pub fn config_dir(override_env: &str, default_dir: &str) -> Option<PathBuf> {
+    match env::var_os(override_env) {
+        Some(value) if !value.is_empty() => Some(PathBuf::from(value)),
+        _ => user_home().map(|home| home.join(default_dir)),
+    }
+}
+
 pub fn create_private_dir(path: &std::path::Path) -> Result<()> {
     fs::create_dir_all(path).with_context(|| format!("creating directory {}", path.display()))?;
     restrict_dir(path)?;
