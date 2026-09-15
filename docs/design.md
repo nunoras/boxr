@@ -220,7 +220,7 @@ The spec's opt-in smoke suite is the project-local `verify-boxr` skill under `.c
 It is run by hand and never in CI.
 It builds the binary, drives a real harness in a throwaway boxr home so the real ledger and profiles are never touched, saves the TOON result and the raw ledger layers to an evidence directory that outlives the run, and then removes only what the run created.
 Its `features/` map holds one file per user-facing feature, and each ticket that adds user-facing surface adds its own file there.
-A run spends real subscription quota, so the skill defaults to the cheapest model and a one-line prompt.
+A run spends real subscription quota, so the skill always uses the cheapest model and a one-line prompt.
 
 ## Milestones
 

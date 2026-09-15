@@ -17,7 +17,7 @@ There is no flag for headless; it is what happens with no mode flag.
 .claude/skills/verify-boxr/scripts/verify-boxr.sh headless-launch
 ```
 
-The driver builds `target/release/boxr` and then runs this from a scratch directory inside the throwaway home:
+The driver builds `target/release/boxr` and then runs this from a scratch directory next to the throwaway home:
 
 ```
 BOXR_HOME=<throwaway>/home boxr --harness claude --model haiku --effort low \
