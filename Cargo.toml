@@ -1,0 +1,20 @@
+[package]
+name = "boxr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Launch coding agents on any harness and record every session in a local ledger"
+license = "Apache-2.0"
+repository = "https://github.com/nunoras/boxr"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+strip = true
+
+[dev-dependencies]
+tempfile = "3"

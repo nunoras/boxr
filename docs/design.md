@@ -41,9 +41,10 @@ If boxr crashes, the harness process is killed rather than orphaned, and the ses
 ### Interactive (`--interactive`)
 
 boxr sets up the account environment and runs the harness TUI in the terminal it was called from.
+On every platform the harness runs as a child process sharing that terminal, and boxr never exec-replaces itself.
+boxr stays alive while the child runs so it can follow the transcript live and record the session, and it exits with the child's exit code.
 boxr never manages terminals, panes or multiplexers.
 Whatever owns the terminal (tmux, herdr, Orca, an IDE) is the caller's business.
-On Windows the harness runs as a child sharing the console, since there is no exec-replace.
 
 ## Harnesses
 
