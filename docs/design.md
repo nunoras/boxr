@@ -166,6 +166,23 @@ It reads the user's prompts, describes their typical style, proposes one specifi
 Every claim it makes must come from CLI output.
 It ships in this repo and installs with `boxr skill install --harness claude|codex|pi|all`.
 
+## Skills
+
+Bundled skills live under `skills/<name>/` in this repo and are embedded in the binary at build time.
+`boxr skill install --harness claude|codex|pi|all` writes each bundled skill into that harness's user-level skill directory, and `all` covers every supported harness.
+A reinstall deletes the skill directory and writes it again, so an update leaves no stale files and no duplicates.
+A new skill is one more `skills/<name>/` folder plus an entry in the bundled list, and it needs no adapter: only the harness's skill directory, not its launch adapter.
+
+Each harness resolves its config directory from its own override environment variable, falling back to the user home, and the skill sits under `skills/` inside it.
+
+| harness | config dir override | default config dir | user skill directory |
+|---|---|---|---|
+| Claude Code | `CLAUDE_CONFIG_DIR` | `~/.claude` | `<config>/skills/<name>` |
+| Codex | `CODEX_HOME` | `~/.codex` | `<config>/skills/<name>` |
+| pi | `PI_CODING_AGENT_DIR` | `~/.pi/agent` | `<config>/skills/<name>` |
+
+Confirmed on 2026-09-15 from each tool's own docs or shipped files: Claude Code documents personal skills at `~/.claude/skills/<name>/SKILL.md`, Codex's shipped `skill-installer` skill names `$CODEX_HOME/skills` with default `~/.codex/skills`, and pi documents global skills at `~/.pi/agent/skills/`.
+
 ## Milestones
 
 1. Launch and ledger: headless and interactive, isolated profiles, subscriptions, live tailing into raw, ATIF JSONL and summary layers, redaction.

@@ -5,9 +5,10 @@ mod home;
 mod output;
 mod run;
 mod session;
+mod skill;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use config::Config;
 use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
 use harness::LaunchRequest;
@@ -25,6 +26,9 @@ const MESSAGE_LIMIT: usize = 200;
     disable_help_subcommand = true
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(long, value_name = "HARNESS")]
     harness: Option<String>,
 
@@ -38,15 +42,95 @@ struct Cli {
     prompt: Option<String>,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillAction {
+    Install(SkillInstall),
+}
+
+#[derive(Args, Debug)]
+struct SkillInstall {
+    #[arg(long, value_name = "HARNESS")]
+    harness: String,
+}
+
 fn main() -> ExitCode {
-    match launch() {
+    match run() {
         Ok(code) => ExitCode::from(code as u8),
         Err(error) => ExitCode::from(report(&error) as u8),
     }
 }
 
-fn launch() -> Result<i32> {
+fn run() -> Result<i32> {
     let cli = Cli::parse();
+    if let Some(Command::Skill { action }) = &cli.command {
+        return match action {
+            SkillAction::Install(args) => skill_install(&args.harness),
+        };
+    }
+    launch(cli)
+}
+
+fn skill_install(harness: &str) -> Result<i32> {
+    let targets: Vec<&'static str> = if harness == "all" {
+        skill::ids().collect()
+    } else {
+        match skill::ids().find(|id| *id == harness) {
+            Some(id) => vec![id],
+            None => {
+                return Err(Fail::usage(
+                    format!("unknown harness `{harness}`"),
+                    vec![format!(
+                        "Choose one of: {}, all",
+                        skill::ids().collect::<Vec<_>>().join(", ")
+                    )],
+                )
+                .into())
+            }
+        }
+    };
+
+    let mut installed = Vec::new();
+    for id in targets {
+        installed.push(skill::install(id)?);
+    }
+
+    print!("{}", render_skill_install(&installed));
+    Ok(EXIT_OK)
+}
+
+fn render_skill_install(installed: &[skill::Installed]) -> String {
+    let mut toon = Toon::new();
+    toon.section("skill")
+        .field("name", skill::SKILL_NAME)
+        .field("action", "install")
+        .number("harnesses", installed.len());
+    let rows: Vec<String> = installed
+        .iter()
+        .map(|item| format!("{}: {}", item.harness, item.dir.display()))
+        .collect();
+    toon.list("installed", &rows);
+    let help = installed
+        .first()
+        .map(|item| {
+            vec![
+                format!("Read the skill at {}", item.dir.join("SKILL.md").display()),
+                "Run `boxr skill install --harness all` to update every harness".to_string(),
+            ]
+        })
+        .unwrap_or_default();
+    toon.list("help", &help);
+    toon.render()
+}
+
+fn launch(cli: Cli) -> Result<i32> {
     let prompt = cli.prompt.clone().ok_or_else(|| {
         Fail::usage(
             "no prompt given",
