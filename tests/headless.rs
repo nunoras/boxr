@@ -292,10 +292,7 @@ fn a_missing_prompt_is_a_usage_error() {
 fn a_harness_missing_from_path_is_its_own_exit_code() {
     let harness = Harness::new();
     fs::create_dir_all(harness.root.path().join("empty")).expect("empty dir");
-    let output = harness.run_with_path(
-        &["--harness", "claude", "--model", "sonnet", "hi"],
-        None,
-    );
+    let output = harness.run_with_path(&["--harness", "claude", "--model", "sonnet", "hi"], None);
     let stderr = stderr_of(&output);
 
     assert_eq!(output.status.code(), Some(3), "{stderr}");
