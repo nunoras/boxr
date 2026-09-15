@@ -1,3 +1,4 @@
+mod account;
 mod atif;
 mod clock;
 mod config;
@@ -20,6 +21,7 @@ use output::{one_line, Toon};
 use run::Ledger;
 use session::Session;
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const MESSAGE_LIMIT: usize = 200;
@@ -45,6 +47,9 @@ struct Cli {
 
     #[arg(long, value_name = "EFFORT")]
     effort: Option<String>,
+
+    #[arg(long, value_name = "NAME")]
+    account: Option<String>,
 
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
@@ -89,6 +94,38 @@ enum Command {
         #[arg(value_name = "ID")]
         id: String,
     },
+    Account {
+        #[command(subcommand)]
+        action: AccountAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AccountAction {
+    Add(AccountAdd),
+    List,
+    Remove(AccountRemove),
+}
+
+#[derive(Args, Debug)]
+struct AccountAdd {
+    #[arg(long, value_name = "HARNESS")]
+    harness: Option<String>,
+
+    #[arg(long, value_name = "NAME")]
+    name: String,
+}
+
+#[derive(Args, Debug)]
+struct AccountRemove {
+    #[arg(long, value_name = "HARNESS")]
+    harness: Option<String>,
+
+    #[arg(long, value_name = "NAME")]
+    name: String,
+
+    #[arg(long)]
+    yes: bool,
 }
 
 fn main() -> ExitCode {
@@ -107,7 +144,7 @@ fn run() -> Result<i32> {
             }) => skill_install(&harness),
         };
     }
-    launch(Cli::parse())
+    dispatch()
 }
 
 fn is_skill_install_command() -> bool {
@@ -149,12 +186,19 @@ fn render_skill_install(installed: &[skill::Installed]) -> String {
     toon.render()
 }
 
-fn launch(cli: Cli) -> Result<i32> {
+fn dispatch() -> Result<i32> {
+    let cli = Cli::parse();
+    let home = home::ensure_home()?;
+    let config = Config::load(&home)?;
     match cli.command {
-        Some(Command::Show { id }) => return show(&id),
-        Some(Command::Export { atif, id }) => return export(atif, &id),
-        None => {}
+        Some(Command::Show { id }) => show(&id),
+        Some(Command::Export { atif, id }) => export(atif, &id),
+        Some(Command::Account { action }) => accounts(action, &home, &config),
+        None => launch(cli, &home, &config),
     }
+}
+
+fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
     let prompt = cli.prompt.clone().ok_or_else(|| {
         Fail::usage(
             "no prompt given",
@@ -162,17 +206,15 @@ fn launch(cli: Cli) -> Result<i32> {
         )
     })?;
 
-    let home = home::ensure_home()?;
-    let config = Config::load(&home)?;
-
     let harness_id = resolve(
         "harness",
         cli.harness,
         config.defaults.harness.clone(),
-        &home,
+        home,
     )?;
-    let model = resolve("model", cli.model, config.defaults.model.clone(), &home)?;
+    let model = resolve("model", cli.model, config.defaults.model.clone(), home)?;
     let effort = cli.effort.or(config.defaults.effort.clone());
+    let account = cli.account.or(config.defaults.account.clone());
 
     let adapter = harness::lookup(&harness_id).ok_or_else(|| {
         Fail::usage(
@@ -184,6 +226,11 @@ fn launch(cli: Cli) -> Result<i32> {
         )
     })?;
 
+    let profile = match &account {
+        Some(name) => Some(profile_for(adapter.as_ref(), home, &harness_id, name)?),
+        None => None,
+    };
+
     let cwd = std::env::current_dir().context("reading the current directory")?;
     let request = LaunchRequest {
         model,
@@ -192,9 +239,12 @@ fn launch(cli: Cli) -> Result<i32> {
         cwd,
     };
 
-    let outcome = run::headless(&adapter, &request, &home)?;
+    let outcome = run::headless(&adapter, &request, profile.as_deref(), home)?;
 
-    print!("{}", render(adapter.id(), &request, &outcome));
+    print!(
+        "{}",
+        render(adapter.id(), &request, &outcome, account.as_deref())
+    );
 
     let ledger_failed = matches!(outcome.ledger, Ledger::Failed(_))
         || outcome.tally.error.is_some()
@@ -206,7 +256,152 @@ fn launch(cli: Cli) -> Result<i32> {
     })
 }
 
-fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> String {
+fn accounts(action: AccountAction, home: &Path, config: &Config) -> Result<i32> {
+    match action {
+        AccountAction::Add(args) => account_add(&args, home, config),
+        AccountAction::List => account_list(home),
+        AccountAction::Remove(args) => account_remove(&args, home, config),
+    }
+}
+
+fn account_add(args: &AccountAdd, home: &Path, config: &Config) -> Result<i32> {
+    let harness_id = resolve(
+        "harness",
+        args.harness.clone(),
+        config.defaults.harness.clone(),
+        home,
+    )?;
+    let adapter = harness::lookup(&harness_id).ok_or_else(|| {
+        Fail::usage(
+            format!("unknown harness `{harness_id}`"),
+            vec![format!(
+                "Known harnesses: {}",
+                harness::known_ids().join(", ")
+            )],
+        )
+    })?;
+    if adapter.config_dir_env().is_none() {
+        return Err(Fail::usage(
+            format!("harness `{harness_id}` cannot isolate its config directory"),
+            vec!["Use a harness boxr can point at a profile directory".to_string()],
+        )
+        .into());
+    }
+
+    let (dir, existed) = account::create(home, &harness_id, &args.name)?;
+    let code = account::login(adapter.as_ref(), &dir)?;
+    if code != 0 {
+        return Err(account::login_failure(&harness_id, &args.name, code));
+    }
+
+    let mut toon = Toon::new();
+    toon.section("account")
+        .field("harness", &harness_id)
+        .field("name", &args.name)
+        .field("dir", &dir.display().to_string())
+        .field("status", if existed { "updated" } else { "created" });
+    toon.list(
+        "help",
+        &[
+            format!(
+                "Run `boxr --harness {harness_id} --account {} \"<prompt>\"` to launch a session with this profile",
+                args.name
+            ),
+            "Run `boxr account list` to see the profiles that exist".to_string(),
+        ],
+    );
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn account_list(home: &Path) -> Result<i32> {
+    let profiles = account::list(home)?;
+    let rows: Vec<Vec<String>> = profiles
+        .iter()
+        .map(|profile| {
+            vec![
+                profile.harness.clone(),
+                profile.name.clone(),
+                profile.dir.display().to_string(),
+            ]
+        })
+        .collect();
+    let mut toon = Toon::new();
+    toon.table("accounts", &["harness", "name", "dir"], &rows);
+    let help = if profiles.is_empty() {
+        vec!["Run `boxr account add --harness claude --name work` to create a profile".to_string()]
+    } else {
+        vec![
+            "Run `boxr --harness claude --account <name> \"<prompt>\"` to launch with a profile"
+                .to_string(),
+            "Run `boxr account remove --harness <h> --name <n> --yes` to delete one".to_string(),
+        ]
+    };
+    toon.list("help", &help);
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn account_remove(args: &AccountRemove, home: &Path, config: &Config) -> Result<i32> {
+    let harness_id = resolve(
+        "harness",
+        args.harness.clone(),
+        config.defaults.harness.clone(),
+        home,
+    )?;
+    if !args.yes {
+        return Err(Fail::usage(
+            format!("removing account `{}` needs confirmation", args.name),
+            vec![
+                format!(
+                    "Run `boxr account remove --harness {harness_id} --name {} --yes` to delete it",
+                    args.name
+                ),
+                "Run `boxr account list` to see the profiles that exist".to_string(),
+            ],
+        )
+        .into());
+    }
+    let dir = account::remove(home, &harness_id, &args.name)?;
+
+    let mut toon = Toon::new();
+    toon.section("account")
+        .field("harness", &harness_id)
+        .field("name", &args.name)
+        .field("dir", &dir.display().to_string())
+        .field("status", "removed");
+    toon.list(
+        "help",
+        &["Run `boxr account list` to see the remaining profiles".to_string()],
+    );
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn profile_for(
+    adapter: &dyn harness::Harness,
+    home: &Path,
+    harness_id: &str,
+    name: &str,
+) -> Result<PathBuf> {
+    if adapter.config_dir_env().is_none() {
+        return Err(Fail::usage(
+            format!("harness `{harness_id}` cannot isolate its config directory"),
+            vec![format!(
+                "Run `boxr --harness {harness_id} \"<prompt>\"` without `--account`"
+            )],
+        )
+        .into());
+    }
+    account::resolve(home, harness_id, name)
+}
+
+fn render(
+    harness_id: &str,
+    request: &LaunchRequest,
+    outcome: &run::Outcome,
+    account: Option<&str>,
+) -> String {
     let session = &outcome.session;
     let mut toon = Toon::new();
     toon.section("session")
@@ -218,6 +413,7 @@ fn render(harness_id: &str, request: &LaunchRequest, outcome: &run::Outcome) -> 
             "effort",
             request.effort.as_deref().unwrap_or("harness-default"),
         )
+        .field("account", account.unwrap_or("harness-default"))
         .field(
             "harnessSessionId",
             outcome.harness_session_id.as_deref().unwrap_or("unknown"),
