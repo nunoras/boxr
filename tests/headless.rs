@@ -99,16 +99,20 @@ impl Harness {
         self.root.path().join("claude.pid")
     }
 
-    fn kill_hung_harness(&self) {
+    fn await_hung_harness(&self) -> String {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let pid = loop {
+        loop {
             let recorded = fs::read_to_string(self.pid_file()).unwrap_or_default();
             if recorded.parse::<u32>().is_ok() {
-                break recorded;
+                return recorded;
             }
             assert!(Instant::now() < deadline, "the fake harness never hung");
             sleep(Duration::from_millis(20));
-        };
+        }
+    }
+
+    fn kill_hung_harness(&self) {
+        let pid = self.await_hung_harness();
         let status = if cfg!(windows) {
             Command::new("taskkill").args(["/F", "/PID", &pid]).status()
         } else {
@@ -841,11 +845,45 @@ fn a_harness_killed_mid_run_still_leaves_a_ledger_and_an_interrupted_summary() {
     assert_eq!(unanswered, 2, "{lines:?}");
 
     let summary = summary_of(&harness, &session_id_of(&stdout));
+    assert!(stdout.contains("status: interrupted"), "{stdout}");
+    assert_eq!(summary["status"], "interrupted");
     if cfg!(unix) {
-        assert!(stdout.contains("status: interrupted"), "{stdout}");
-        assert_eq!(summary["status"], "interrupted");
         assert_eq!(summary["exitCode"], 128 + 9);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_after(9);
+    let child = harness.spawn(&["--harness", "claude", "--model", "opus", "review"]);
+    harness.await_hung_harness();
+
+    let status = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(status.success(), "could not interrupt boxr");
+
+    let output = child.wait_with_output().expect("boxr finishes");
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: interrupted"), "{stdout}");
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    assert_eq!(lines[0]["schema_version"], "ATIF-v1.8");
+    let steps = &lines[1..lines.len() - 1];
+    assert_valid_steps(steps);
+    assert_eq!(
+        lines.last().expect("closing line")["final_metrics"]["total_steps"],
+        steps.len() as i64,
+        "{lines:?}"
+    );
+
+    let summary = summary_of(&harness, &session_id_of(&stdout));
+    assert_eq!(summary["status"], "interrupted");
 }
 
 #[test]

@@ -10,8 +10,9 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub enum Ledger {
     Recorded(PathBuf),
@@ -69,20 +70,30 @@ pub fn headless(
 
     let started = Instant::now();
     let started_at = now_millis();
-    let mut child = Supervised(
-        Command::new(&program)
-            .args(&command.args)
-            .current_dir(&request.cwd)
-            .stdin(if command.stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("starting harness {}", program.display()))?,
-    );
+    let mut spawned = Command::new(&program)
+        .args(&command.args)
+        .current_dir(&request.cwd)
+        .stdin(if command.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("starting harness {}", program.display()))?;
+
+    let stdin_pipe = spawned.stdin.take();
+    let stdout = spawned
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("harness stdout was not captured"))?;
+    let mut stderr = spawned
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
+    let child = Arc::new(Mutex::new(Supervised(spawned)));
+    let stopped = stop_on_signal(&child);
 
     let session = Session::create(home)?;
     let follower = Follower::start(
@@ -102,21 +113,11 @@ pub fn headless(
     let stderr_path = session.stderr_path();
     let mut stderr_file = create_private_file(&stderr_path)?;
 
-    let stdin_thread = match (command.stdin, child.0.stdin.take()) {
+    let stdin_thread = match (command.stdin, stdin_pipe) {
         (Some(input), Some(pipe)) => Some(std::thread::spawn(move || deliver(pipe, input))),
         _ => None,
     };
 
-    let stdout = child
-        .0
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("harness stdout was not captured"))?;
-    let mut stderr = child
-        .0
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
     let stderr_thread = std::thread::spawn(move || std::io::copy(&mut stderr, &mut stderr_file));
 
     let mut harness_session_id = None;
@@ -154,7 +155,7 @@ pub fn headless(
         }
     }
 
-    let status = child.0.wait().context("waiting for the harness to exit")?;
+    let status = wait_for(&child)?;
     if let Some(thread) = stdin_thread {
         thread
             .join()
@@ -188,7 +189,7 @@ pub fn headless(
         start: iso8601(started_at),
         end: iso8601(ended_at),
         duration_ms: duration_ms as u64,
-        status: status_of(&status).to_string(),
+        status: status_of(&status, stopped.load(Ordering::SeqCst)).to_string(),
         exit_code,
         steps: tally.steps,
         prompt_tokens: tally.prompt_tokens,
@@ -214,11 +215,62 @@ pub fn headless(
     })
 }
 
-fn status_of(status: &ExitStatus) -> &'static str {
-    match (status.success(), signal_of(status)) {
-        (true, _) => "ok",
-        (false, Some(_)) => "interrupted",
-        (false, None) => "failed",
+fn status_of(status: &ExitStatus, stopped_by_boxr: bool) -> &'static str {
+    if status.success() {
+        return "ok";
+    }
+    if stopped_by_boxr || stopped_externally(status) {
+        return "interrupted";
+    }
+    "failed"
+}
+
+#[cfg(unix)]
+fn stopped_externally(status: &ExitStatus) -> bool {
+    const HANGUP: i32 = 1;
+    const INTERRUPT: i32 = 2;
+    const KILL: i32 = 9;
+    const TERMINATE: i32 = 15;
+    matches!(
+        signal_of(status),
+        Some(HANGUP | INTERRUPT | KILL | TERMINATE)
+    )
+}
+
+#[cfg(not(unix))]
+fn stopped_externally(status: &ExitStatus) -> bool {
+    const STATUS_CONTROL_C_EXIT: i32 = -1_073_741_510;
+    status.code() == Some(STATUS_CONTROL_C_EXIT)
+}
+
+fn stop_on_signal(child: &Arc<Mutex<Supervised>>) -> Arc<AtomicBool> {
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stopped);
+    let target = Arc::clone(child);
+    let _ = ctrlc::set_handler(move || {
+        flag.store(true, Ordering::SeqCst);
+        if let Ok(mut supervised) = target.lock() {
+            let _ = supervised.0.kill();
+        }
+    });
+    stopped
+}
+
+fn wait_for(child: &Arc<Mutex<Supervised>>) -> Result<ExitStatus> {
+    loop {
+        {
+            let mut supervised = child
+                .lock()
+                .map_err(|_| anyhow!("the harness supervisor lock was poisoned"))?;
+            if let Some(status) = supervised
+                .0
+                .try_wait()
+                .context("waiting for the harness to exit")?
+            {
+                return Ok(status);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
