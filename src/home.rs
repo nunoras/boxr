@@ -11,7 +11,9 @@ pub fn boxr_home() -> Result<PathBuf> {
             return Ok(PathBuf::from(value));
         }
     }
-    let base = user_home()?;
+    let base = user_home().ok_or_else(|| {
+        anyhow!("cannot locate the user home directory; set {HOME_ENV} to choose the boxr home")
+    })?;
     Ok(base.join(".boxr"))
 }
 
@@ -21,22 +23,16 @@ pub fn ensure_home() -> Result<PathBuf> {
     Ok(home)
 }
 
-fn user_home() -> Result<PathBuf> {
+pub fn user_home() -> Option<PathBuf> {
     let keys: &[&str] = if cfg!(windows) {
         &["USERPROFILE", "HOME"]
     } else {
         &["HOME"]
     };
-    for key in keys {
-        if let Some(value) = env::var_os(key) {
-            if !value.is_empty() {
-                return Ok(PathBuf::from(value));
-            }
-        }
-    }
-    Err(anyhow!(
-        "cannot locate the user home directory; set {HOME_ENV} to choose the boxr home"
-    ))
+    keys.iter()
+        .filter_map(env::var_os)
+        .find(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 pub fn create_private_dir(path: &std::path::Path) -> Result<()> {

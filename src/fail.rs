@@ -5,6 +5,7 @@ pub const EXIT_SESSION_FAILED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_HARNESS_UNAVAILABLE: i32 = 3;
 pub const EXIT_INTERNAL: i32 = 4;
+pub const EXIT_LEDGER_FAILED: i32 = 5;
 
 #[derive(Debug)]
 pub struct Fail {

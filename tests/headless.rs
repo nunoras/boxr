@@ -7,6 +7,7 @@ struct Harness {
     bin_dir: PathBuf,
     args_file: PathBuf,
     exit_code: String,
+    withhold_transcript: bool,
 }
 
 impl Harness {
@@ -22,6 +23,7 @@ impl Harness {
             bin_dir,
             args_file: PathBuf::new(),
             exit_code: "0".to_string(),
+            withhold_transcript: false,
         }
     }
 
@@ -51,6 +53,10 @@ impl Harness {
         self.exit_code = code.to_string();
     }
 
+    fn withhold_transcript(&mut self) {
+        self.withhold_transcript = true;
+    }
+
     fn run(&self, args: &[&str]) -> Output {
         self.run_with_path(args, Some(&self.bin_dir))
     }
@@ -73,6 +79,9 @@ impl Harness {
             );
         if !self.args_file.as_os_str().is_empty() {
             command.env("BOXR_FAKE_CLAUDE_ARGS", &self.args_file);
+        }
+        if self.withhold_transcript {
+            command.env("BOXR_FAKE_CLAUDE_NO_TRANSCRIPT", "1");
         }
         command.output().expect("boxr runs")
     }
@@ -151,6 +160,7 @@ fn headless_launch_prints_a_toon_result_and_exits_zero() {
         "{stdout}"
     );
     assert!(stdout.contains("durationMs: "), "{stdout}");
+    assert!(stdout.contains("ledger: recorded"), "{stdout}");
     assert!(stdout.contains("help[2]:"), "{stdout}");
 
     let id_line = stdout
@@ -265,4 +275,63 @@ fn a_harness_missing_from_path_is_its_own_exit_code() {
 
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     assert!(stderr.contains("was not found on PATH"), "{stderr}");
+}
+
+#[test]
+fn an_unrecorded_transcript_is_a_ledger_failure_with_its_own_exit_code() {
+    let mut harness = Harness::new();
+    harness.withhold_transcript();
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(5), "{stdout}");
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(stdout.contains("ledger: failed"), "{stdout}");
+    assert!(stdout.contains("ledgerError: "), "{stdout}");
+    assert!(!stdout.contains("Read the raw transcript"), "{stdout}");
+    assert!(!session_dir(&harness).join("raw/transcript.jsonl").exists());
+}
+
+#[test]
+fn a_prompt_starting_with_a_dash_reaches_claude_as_the_prompt() {
+    let mut harness = Harness::new();
+    harness.record_args();
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--", "-h"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+
+    let args = harness.recorded_args();
+    assert_eq!(args[args.len() - 2..], ["--", "-h"], "{args:?}");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_cmd_shim_on_path_launches_claude() {
+    let harness = Harness::new();
+    fs::remove_file(harness.bin_dir.join(fake_name())).expect("remove fake claude.exe");
+    let tools = harness.root.path().join("tools");
+    fs::create_dir_all(&tools).expect("tools dir");
+    let fake = tools.join("fake-claude.exe");
+    fs::copy(fake_claude(), &fake).expect("install fake claude outside PATH");
+    fs::write(
+        harness.bin_dir.join("claude.cmd"),
+        format!("@\"{}\" %*\r\n", fake.display()),
+    )
+    .expect("claude.cmd shim");
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(stdout.contains("ledger: recorded"), "{stdout}");
 }
