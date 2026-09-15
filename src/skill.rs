@@ -1,12 +1,19 @@
-use crate::home::user_home;
+use crate::fail::Fail;
+use crate::harness::claude;
+use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
-use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-pub const SKILL_NAME: &str = "boxr-prompts";
+struct BundledSkill {
+    name: &'static str,
+    files: &'static [(&'static str, &'static str)],
+}
 
-const BUNDLED: &[(&str, &str)] = &[("SKILL.md", include_str!("../skills/boxr-prompts/SKILL.md"))];
+const BUNDLED: &[BundledSkill] = &[BundledSkill {
+    name: "boxr-prompts",
+    files: &[("SKILL.md", include_str!("../skills/boxr-prompts/SKILL.md"))],
+}];
 
 struct HarnessSpec {
     id: &'static str,
@@ -17,8 +24,8 @@ struct HarnessSpec {
 const HARNESSES: &[HarnessSpec] = &[
     HarnessSpec {
         id: "claude",
-        config_env: "CLAUDE_CONFIG_DIR",
-        default_config_dir: ".claude",
+        config_env: claude::CONFIG_DIR_ENV,
+        default_config_dir: claude::DEFAULT_CONFIG_DIR,
     },
     HarnessSpec {
         id: "codex",
@@ -37,39 +44,63 @@ pub struct Installed {
     pub dir: PathBuf,
 }
 
-pub fn ids() -> impl Iterator<Item = &'static str> {
-    HARNESSES.iter().map(|spec| spec.id)
+pub fn names() -> impl Iterator<Item = &'static str> {
+    BUNDLED.iter().map(|skill| skill.name)
 }
 
-pub fn install(harness: &'static str) -> Result<Installed> {
-    let spec = HARNESSES
-        .iter()
-        .find(|spec| spec.id == harness)
-        .ok_or_else(|| anyhow!("unknown harness `{harness}`"))?;
-    let dir = config_dir(spec)?.join("skills").join(SKILL_NAME);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).with_context(|| format!("replacing {}", dir.display()))?;
+pub fn install(harness: &str) -> Result<Vec<Installed>> {
+    let mut installed = Vec::new();
+    for spec in targets(harness)? {
+        let skills = config_dir(spec.config_env, spec.default_config_dir)
+            .ok_or_else(|| {
+                anyhow!(
+                    "cannot locate the user home directory; set {}",
+                    spec.config_env
+                )
+            })?
+            .join("skills");
+        for skill in BUNDLED {
+            let dir = skills.join(skill.name);
+            write_skill(skill, &dir)?;
+            installed.push(Installed {
+                harness: spec.id,
+                dir,
+            });
+        }
     }
-    for (relative, contents) in BUNDLED {
+    Ok(installed)
+}
+
+fn targets(harness: &str) -> Result<Vec<&'static HarnessSpec>, Fail> {
+    if harness == "all" {
+        return Ok(HARNESSES.iter().collect());
+    }
+    match HARNESSES.iter().find(|spec| spec.id == harness) {
+        Some(spec) => Ok(vec![spec]),
+        None => Err(Fail::usage(
+            format!("unknown harness `{harness}`"),
+            vec![format!(
+                "Choose one of: {}, all",
+                HARNESSES
+                    .iter()
+                    .map(|spec| spec.id)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )],
+        )),
+    }
+}
+
+fn write_skill(skill: &BundledSkill, dir: &Path) -> Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir).with_context(|| format!("replacing {}", dir.display()))?;
+    }
+    for (relative, contents) in skill.files {
         let path = dir.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
     }
-    Ok(Installed { harness, dir })
-}
-
-fn config_dir(spec: &HarnessSpec) -> Result<PathBuf> {
-    if let Some(value) = env::var_os(spec.config_env).filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(value));
-    }
-    user_home()
-        .map(|home| home.join(spec.default_config_dir))
-        .ok_or_else(|| {
-            anyhow!(
-                "cannot locate the user home directory; set {}",
-                spec.config_env
-            )
-        })
+    Ok(())
 }

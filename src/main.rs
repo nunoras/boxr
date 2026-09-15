@@ -79,39 +79,20 @@ fn run() -> Result<i32> {
 }
 
 fn skill_install(harness: &str) -> Result<i32> {
-    let targets: Vec<&'static str> = if harness == "all" {
-        skill::ids().collect()
-    } else {
-        match skill::ids().find(|id| *id == harness) {
-            Some(id) => vec![id],
-            None => {
-                return Err(Fail::usage(
-                    format!("unknown harness `{harness}`"),
-                    vec![format!(
-                        "Choose one of: {}, all",
-                        skill::ids().collect::<Vec<_>>().join(", ")
-                    )],
-                )
-                .into())
-            }
-        }
-    };
-
-    let mut installed = Vec::new();
-    for id in targets {
-        installed.push(skill::install(id)?);
-    }
-
+    let installed = skill::install(harness)?;
     print!("{}", render_skill_install(&installed));
     Ok(EXIT_OK)
 }
 
 fn render_skill_install(installed: &[skill::Installed]) -> String {
+    let skills: Vec<String> = skill::names().map(str::to_string).collect();
+    let mut harnesses: Vec<&str> = installed.iter().map(|item| item.harness).collect();
+    harnesses.dedup();
     let mut toon = Toon::new();
     toon.section("skill")
-        .field("name", skill::SKILL_NAME)
         .field("action", "install")
-        .number("harnesses", installed.len());
+        .number("harnesses", harnesses.len());
+    toon.list("skills", &skills);
     let rows: Vec<String> = installed
         .iter()
         .map(|item| format!("{}: {}", item.harness, item.dir.display()))

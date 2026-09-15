@@ -1,12 +1,12 @@
 use super::{Harness, HarnessCommand, LaunchRequest, StreamEvent};
-use crate::home::user_home;
+use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+pub const DEFAULT_CONFIG_DIR: &str = ".claude";
 
 pub struct ClaudeCode;
 
@@ -53,7 +53,7 @@ impl Harness for ClaudeCode {
     }
 
     fn transcript(&self, harness_session_id: &str) -> Result<PathBuf> {
-        let projects = config_dir()
+        let projects = config_dir(CONFIG_DIR_ENV, DEFAULT_CONFIG_DIR)
             .ok_or_else(|| {
                 anyhow!("cannot locate the claude config directory; set {CONFIG_DIR_ENV}")
             })?
@@ -71,12 +71,5 @@ impl Harness for ClaudeCode {
             "no transcript {wanted} under {}",
             projects.display()
         ))
-    }
-}
-
-fn config_dir() -> Option<PathBuf> {
-    match env::var_os(CONFIG_DIR_ENV) {
-        Some(value) if !value.is_empty() => Some(PathBuf::from(value)),
-        _ => user_home().map(|home| home.join(".claude")),
     }
 }

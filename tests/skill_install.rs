@@ -73,7 +73,7 @@ fn claude_installs_into_the_user_skill_directory_under_the_test_home() {
         "stderr: {}",
         stderr_of(&output)
     );
-    assert!(stdout.contains("name: boxr-prompts"), "{stdout}");
+    assert!(stdout.contains("skills[1]:\n  boxr-prompts\n"), "{stdout}");
     assert!(stdout.contains("action: install"), "{stdout}");
     assert!(stdout.contains("harnesses: 1"), "{stdout}");
     assert!(stdout.contains("claude: "), "{stdout}");
