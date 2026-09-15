@@ -356,6 +356,12 @@ fn export(atif: bool, id: &str) -> Result<i32> {
     })?;
     let session = Session::open(&home, id);
     let document = ledger::trajectory(&session.normalized_path(), &summary)?;
+    if document.steps.is_empty() {
+        return Err(anyhow::Error::from(Fail::usage(
+            format!("session {id} has no steps, and an ATIF trajectory needs at least one"),
+            vec![format!("Run `boxr show {id}` to see how the session ended")],
+        )));
+    }
     let target = session.trajectory_path();
     ledger::write_trajectory(&target, &document)?;
 

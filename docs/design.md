@@ -78,6 +78,7 @@ Three layers per session:
 2. Normalized: JSONL where each line is one [ATIF](https://www.harborframework.com/docs/agents/trajectory-format) step object, plus a header line (session and agent info) and a closing line (final metrics).
    Our own fields (profile, subscription, effort, kind) go in ATIF `extra`.
    `boxr export --atif <id>` wraps the lines into a standard ATIF document.
+   ATIF requires at least one step, so exporting a session that recorded none is refused as a usage error rather than written as an invalid document.
 3. Summary: one line per session with harness, model, effort, profile, subscription, start, end, tokens, cost, status, kind and outcomes.
    All analytics query this layer.
    Status is `ok` for a zero exit and `interrupted` when the harness was stopped from outside or by boxr itself: an external-stop signal (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGKILL`) on Unix, Ctrl-C or Ctrl-Break (`STATUS_CONTROL_C_EXIT`) on Windows, or a termination boxr caused on either platform.

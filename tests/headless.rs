@@ -981,6 +981,23 @@ fn a_harness_that_exits_non_zero_before_any_result_is_failed_not_interrupted() {
 }
 
 #[test]
+fn export_atif_of_a_session_with_no_steps_is_refused() {
+    let mut harness = Harness::new();
+    harness.use_fixture("missing");
+    let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let id = session_id_of(&stdout_of(&launched));
+
+    let output = harness.run(&["export", "--atif", &id]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout_of(&output));
+    assert!(
+        stderr_of(&output).contains("has no steps"),
+        "{}",
+        stderr_of(&output)
+    );
+    assert!(!session_dir(&harness).join("export").exists());
+}
+
+#[test]
 fn an_unwritable_summary_still_prints_the_session_as_a_ledger_failure() {
     let harness = Harness::new();
     fs::create_dir_all(harness.boxr_home().join("summary.jsonl")).expect("block the summary");
