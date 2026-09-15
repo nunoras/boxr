@@ -161,7 +161,7 @@ fn session_dir(harness: &Harness) -> PathBuf {
 #[test]
 fn headless_launch_prints_a_toon_result_and_exits_zero() {
     let harness = Harness::new();
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", "hello"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(
@@ -195,7 +195,7 @@ fn headless_launch_prints_a_toon_result_and_exits_zero() {
 #[test]
 fn the_raw_transcript_lands_verbatim_under_the_boxr_home() {
     let harness = Harness::new();
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", "hello"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -219,7 +219,7 @@ fn the_raw_transcript_lands_verbatim_under_the_boxr_home() {
 fn a_harness_failure_is_a_failed_status_and_a_non_zero_exit_code() {
     let mut harness = Harness::new();
     harness.fail_with("7");
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", "hello"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(output.status.code(), Some(1), "{stdout}");
@@ -236,7 +236,7 @@ fn harness_model_and_effort_fall_back_to_config_defaults() {
     let mut harness = Harness::new();
     harness.record_args();
     harness.write_config(r#"{"defaults":{"harness":"claude","model":"opus","effort":"high"}}"#);
-    let output = harness.run(&["hello"]);
+    let output = harness.run(&["--p", "hello"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(
@@ -257,7 +257,7 @@ fn harness_model_and_effort_fall_back_to_config_defaults() {
 #[test]
 fn a_missing_required_value_is_a_clear_error() {
     let harness = Harness::new();
-    let output = harness.run(&["--harness", "claude", "hello"]);
+    let output = harness.run(&["--harness", "claude", "--p", "hello"]);
     let stderr = stderr_of(&output);
 
     assert_eq!(output.status.code(), Some(2), "{stderr}");
@@ -271,7 +271,7 @@ fn a_missing_required_value_is_a_clear_error() {
 #[test]
 fn an_unknown_harness_is_a_usage_error() {
     let harness = Harness::new();
-    let output = harness.run(&["--harness", "gemini", "--model", "pro", "hello"]);
+    let output = harness.run(&["--harness", "gemini", "--model", "pro", "--p", "hello"]);
     let stderr = stderr_of(&output);
 
     assert_eq!(output.status.code(), Some(2), "{stderr}");
@@ -292,7 +292,10 @@ fn a_missing_prompt_is_a_usage_error() {
 fn a_harness_missing_from_path_is_its_own_exit_code() {
     let harness = Harness::new();
     fs::create_dir_all(harness.root.path().join("empty")).expect("empty dir");
-    let output = harness.run_with_path(&["--harness", "claude", "--model", "sonnet", "hi"], None);
+    let output = harness.run_with_path(
+        &["--harness", "claude", "--model", "sonnet", "--p", "hi"],
+        None,
+    );
     let stderr = stderr_of(&output);
 
     assert_eq!(output.status.code(), Some(3), "{stderr}");
@@ -304,7 +307,7 @@ fn a_harness_missing_from_path_is_its_own_exit_code() {
 fn an_unrecorded_transcript_is_a_ledger_failure_with_its_own_exit_code() {
     let mut harness = Harness::new();
     harness.withhold_transcript();
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", "hello"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(output.status.code(), Some(5), "{stdout}");
@@ -319,7 +322,7 @@ fn an_unrecorded_transcript_is_a_ledger_failure_with_its_own_exit_code() {
 fn a_prompt_starting_with_a_dash_reaches_claude_as_the_prompt() {
     let mut harness = Harness::new();
     harness.record_args();
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--", "-h"]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", "-h"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -333,7 +336,7 @@ fn a_prompt_starting_with_a_dash_reaches_claude_as_the_prompt() {
 }
 
 fn assert_prompt_reaches_claude_intact(harness: &Harness, prompt: &str) {
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", prompt]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", prompt]);
     let stdout = stdout_of(&output);
 
     assert_eq!(
@@ -376,7 +379,7 @@ fn a_cmd_shim_on_path_launches_claude() {
     let harness = Harness::new();
     harness.install_cmd_shim();
 
-    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "--p", "hello"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(

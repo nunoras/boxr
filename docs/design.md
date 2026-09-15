@@ -24,7 +24,7 @@ macOS is best-effort.
 ## Launching
 
 ```
-boxr --harness <h> --model <m> --effort <e> --account <profile> [--kind <k>] "<prompt>"
+boxr --harness <h> --model <m> --effort <e> --account <profile> [--kind <k>] --p "<prompt>"
 ```
 
 Harness, model, effort and account are explicit, with defaults from config.
@@ -164,12 +164,12 @@ CLI primitives:
 The skill is a standard SKILL.md.
 It reads the user's prompts, describes their typical style, proposes one specific change as a variant, measures it through the eval CLI, and reports the result.
 Every claim it makes must come from CLI output.
-It ships in this repo and installs with `boxr skill install --harness claude|codex|pi|all`.
+It ships in this repo and installs with `boxr -i skills [--harness claude|codex|pi|all]`.
 
 ## Skills
 
 Bundled skills live under `skills/<name>/` in this repo and are embedded in the binary at build time.
-`boxr skill install --harness claude|codex|pi|all` writes each bundled skill into that harness's user-level skill directory, and `all` covers every supported harness.
+`boxr -i skills [--harness claude|codex|pi|all]` writes each bundled skill into that harness's user-level skill directory, and omitting `--harness` covers every supported harness.
 A reinstall deletes the skill directory and writes it again, so an update leaves no stale files and no duplicates.
 The bundled list in `src/skill.rs` is a list of named skills, each with its own files, and each installs into its own `skills/<name>/` directory, so skills cannot overwrite each other.
 A new bundled skill is one more `skills/<name>/` folder plus one named entry in that list, and it needs no adapter: only the harness's skill directory, not its launch adapter.
