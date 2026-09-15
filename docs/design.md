@@ -85,6 +85,7 @@ Three layers per session:
    One narrow Windows exception: a forced kill by a third party (`taskkill /F`, `TerminateProcess`) exits with an ordinary code that cannot be told apart from a real failure, so it is recorded as `failed`.
    Every other non-zero exit is `failed`, with or without a final result.
    When boxr itself is asked to stop, it kills the harness, lets the transcript follower finish, writes the closing line and a summary marked `interrupted`, and only then exits.
+   That includes closing the console, logoff and shutdown on Windows, where boxr holds the console control event until the summary is written, within Windows' five second budget for those events.
 
 Storage is JSONL on disk.
 TOON is only the output shape when an agent reads through the CLI.

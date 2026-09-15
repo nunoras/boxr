@@ -151,11 +151,16 @@ impl Harness {
             unsafe { console::AllocConsole() };
             command.creation_flags(CREATE_NEW_PROCESS_GROUP);
         }
-        command
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("boxr starts")
+        spawn_piped(&mut command)
+    }
+
+    #[cfg(windows)]
+    fn spawn_in_own_console(&self, args: &[&str]) -> Child {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let mut command = self.command(args, Some(&self.bin_dir));
+        command.creation_flags(CREATE_NEW_CONSOLE);
+        spawn_piped(&mut command)
     }
 
     fn run_with_path(&self, args: &[&str], bin_dir: Option<&Path>) -> Output {
@@ -194,6 +199,14 @@ impl Harness {
     }
 }
 
+fn spawn_piped(command: &mut Command) -> Child {
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("boxr starts")
+}
+
 fn fixture_dir(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/claude")
@@ -209,19 +222,19 @@ fn fake_name() -> &'static str {
 }
 
 fn fake_claude() -> PathBuf {
+    example_binary("fake-claude")
+}
+
+fn example_binary(name: &str) -> PathBuf {
     let boxr = Path::new(env!("CARGO_BIN_EXE_boxr"));
     let path = boxr
         .parent()
         .expect("target directory")
         .join("examples")
-        .join(if cfg!(windows) {
-            "fake-claude.exe"
-        } else {
-            "fake-claude"
-        });
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     assert!(
         path.is_file(),
-        "the fake claude example is missing at {}; build it with `cargo build --example fake-claude`",
+        "the {name} example is missing at {}; build it with `cargo build --example {name}`",
         path.display()
     );
     path
@@ -915,6 +928,41 @@ fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted()
     );
 
     let summary = summary_of(&harness, &session_id_of(&stdout));
+    assert_eq!(summary["status"], "interrupted");
+}
+
+#[cfg(windows)]
+#[test]
+fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted() {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_after(9);
+    let child = harness.spawn_in_own_console(&["--harness", "claude", "--model", "opus", "review"]);
+    harness.await_hung_harness();
+
+    let closed = Command::new(example_binary("close-console"))
+        .arg(child.id().to_string())
+        .creation_flags(DETACHED_PROCESS)
+        .output()
+        .expect("close-console runs");
+    assert!(closed.status.success(), "{}", stderr_of(&closed));
+    child.wait_with_output().expect("boxr finishes");
+
+    let session = session_dir(&harness);
+    let lines = normalized_lines(&session.join("normalized.jsonl"));
+    assert_eq!(lines[0]["schema_version"], "ATIF-v1.8");
+    let steps = &lines[1..lines.len() - 1];
+    assert_valid_steps(steps);
+    assert_eq!(
+        lines.last().expect("closing line")["final_metrics"]["total_steps"],
+        steps.len() as i64,
+        "{lines:?}"
+    );
+
+    let id = session.file_name().expect("session id").to_string_lossy();
+    let summary = summary_of(&harness, &id);
     assert_eq!(summary["status"], "interrupted");
 }
 

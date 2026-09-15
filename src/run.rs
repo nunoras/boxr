@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Once, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 pub enum Ledger {
@@ -93,7 +93,7 @@ pub fn headless(
         .take()
         .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
     let child = Arc::new(Mutex::new(Supervised(spawned)));
-    let stopped = stop_on_signal(&child);
+    let stop = watch_for_stop(&child);
 
     let session = Session::create(home)?;
     let follower = Follower::start(
@@ -189,7 +189,7 @@ pub fn headless(
         start: iso8601(started_at),
         end: iso8601(ended_at),
         duration_ms: duration_ms as u64,
-        status: status_of(&status, stopped.load(Ordering::SeqCst)).to_string(),
+        status: status_of(&status, stop.was_requested()).to_string(),
         exit_code,
         steps: tally.steps,
         prompt_tokens: tally.prompt_tokens,
@@ -200,6 +200,7 @@ pub fn headless(
     let summary_error = ledger::append_summary(&summary_path, &summary)
         .err()
         .map(|error| format!("{error:#}"));
+    stop.finalize();
 
     Ok(Outcome {
         session,
@@ -243,17 +244,100 @@ fn stopped_externally(status: &ExitStatus) -> bool {
     status.code() == Some(STATUS_CONTROL_C_EXIT)
 }
 
-fn stop_on_signal(child: &Arc<Mutex<Supervised>>) -> Arc<AtomicBool> {
-    let stopped = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&stopped);
-    let target = Arc::downgrade(child);
-    let _ = ctrlc::set_handler(move || {
-        flag.store(true, Ordering::SeqCst);
-        if let Some(child) = target.upgrade() {
+struct StopRequest {
+    child: Weak<Mutex<Supervised>>,
+    requested: AtomicBool,
+    finalized: Mutex<bool>,
+    finalized_changed: Condvar,
+}
+
+impl StopRequest {
+    fn request(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+        if let Some(child) = self.child.upgrade() {
             let _ = child.lock().map(|mut supervised| supervised.0.kill());
         }
+    }
+
+    fn was_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    fn finalize(&self) {
+        *self
+            .finalized
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = true;
+        self.finalized_changed.notify_all();
+    }
+
+    #[cfg(windows)]
+    fn await_finalized(&self, budget: Duration) {
+        let finalized = self
+            .finalized
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _ = self
+            .finalized_changed
+            .wait_timeout_while(finalized, budget, |finalized| !*finalized);
+    }
+}
+
+static ACTIVE_STOP: Mutex<Option<Arc<StopRequest>>> = Mutex::new(None);
+static STOP_HANDLER: Once = Once::new();
+
+fn watch_for_stop(child: &Arc<Mutex<Supervised>>) -> Arc<StopRequest> {
+    let stop = Arc::new(StopRequest {
+        child: Arc::downgrade(child),
+        requested: AtomicBool::new(false),
+        finalized: Mutex::new(false),
+        finalized_changed: Condvar::new(),
     });
-    stopped
+    *ACTIVE_STOP.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&stop));
+    STOP_HANDLER.call_once(install_stop_handler);
+    stop
+}
+
+fn active_stop() -> Option<Arc<StopRequest>> {
+    ACTIVE_STOP
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+#[cfg(unix)]
+fn install_stop_handler() {
+    let _ = ctrlc::set_handler(|| {
+        if let Some(stop) = active_stop() {
+            stop.request();
+        }
+    });
+}
+
+#[cfg(windows)]
+fn install_stop_handler() {
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::System::Console::{
+        SetConsoleCtrlHandler, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+    };
+    const CLOSE_BUDGET: Duration = Duration::from_millis(4500);
+
+    unsafe extern "system" fn on_console_event(event: u32) -> BOOL {
+        if let Some(stop) = active_stop() {
+            stop.request();
+            if matches!(
+                event,
+                CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
+            ) {
+                stop.await_finalized(CLOSE_BUDGET);
+            }
+        }
+        1
+    }
+
+    unsafe {
+        SetConsoleCtrlHandler(Some(on_console_event), 1);
+    }
 }
 
 fn wait_for(child: &Arc<Mutex<Supervised>>) -> Result<ExitStatus> {
