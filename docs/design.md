@@ -41,13 +41,17 @@ If boxr crashes, the harness process is killed rather than orphaned, and the ses
 #### Supervising a detached session
 
 Every headless launch writes a launch record and its supervisor pid into the session directory, so a session can be observed while it runs.
-`--detach` spawns a second boxr process into its own session, which supervises the harness and writes the launch result and the summary line, while the launching boxr exits.
-`boxr ps` lists every session whose supervisor is still alive, foreground or detached.
+`--detach` spawns a second boxr process into its own process session, which supervises the harness and writes the launch result and the summary line, while the launching boxr exits.
+If detach fails after writing the launch record, any spawned supervisor is killed and reaped and the session is finalized as interrupted, so it does not stick as starting or keep running after the caller was told the launch failed.
+`boxr ps` lists every session that is still starting or whose supervisor is still alive, foreground or detached.
+A session stays running while its supervisor is alive, even if a summary line already exists; finish from the summary or report only when the supervisor is not alive.
+A launch record without a supervisor pid is still starting, not interrupted.
+Only when a supervisor record was written and its pid is dead, and the summary and report are still missing, is the session recorded as interrupted the first time `ps`, `status` or `wait` looks at it, so a killed supervisor still leaves one summarized session.
 `boxr status` reports a running session without blocking and the launch result of a finished one, and `boxr wait` blocks until the result exists.
 `boxr tail` streams the normalized ledger as it is appended.
-A session whose supervisor is gone and whose summary line is missing is recorded as interrupted the first time `ps`, `status` or `wait` looks at it, so a killed supervisor still leaves one summarized session.
 `boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
 The harness dies with boxr: on Linux it is given `PR_SET_PDEATHSIG`, and on Windows it joins a job object that kills it when boxr exits.
+If that guard cannot be set up, the launch fails and any spawned harness is killed rather than left running unprotected.
 
 ### Interactive (`--interactive`)
 

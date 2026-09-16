@@ -779,7 +779,10 @@ fn assert_no_zombie_supervisors() {
     let text = String::from_utf8_lossy(&output.stdout);
     let zombies: Vec<_> = text
         .lines()
-        .filter(|line| line.contains("__supervise") && line.split_whitespace().any(|part| part.starts_with('Z')))
+        .filter(|line| {
+            line.contains("__supervise")
+                && line.split_whitespace().any(|part| part.starts_with('Z'))
+        })
         .collect();
     assert!(
         zombies.is_empty(),
