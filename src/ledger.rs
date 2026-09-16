@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -37,6 +37,7 @@ pub struct Seed {
     pub effort: Option<String>,
     pub mode: String,
     pub profile: Option<String>,
+    pub resumed_from: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -61,6 +62,7 @@ impl Follower {
         path: PathBuf,
         seed: Seed,
         account: Option<PathBuf>,
+        from_bytes: u64,
     ) -> Follower {
         let (sender, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -71,6 +73,7 @@ impl Follower {
                 harness,
                 session,
                 account,
+                from_bytes,
             };
             if let Err(error) = capture(&source, &path, &seed, receiver, &flag, &mut tally) {
                 tally.error.get_or_insert_with(|| format!("{error:#}"));
@@ -102,6 +105,7 @@ struct Source {
     harness: Arc<dyn Harness>,
     session: HarnessSession,
     account: Option<PathBuf>,
+    from_bytes: u64,
 }
 
 fn capture(
@@ -124,8 +128,16 @@ fn capture(
 
     if let Some(start) = start {
         let harness = source.harness.as_ref();
-        let followed = await_transcript(source, &start.harness_session_id, stop)
-            .and_then(|transcript| follow_file(harness, &transcript, &mut normalizer, stop));
+        let followed =
+            await_transcript(source, &start.harness_session_id, stop).and_then(|transcript| {
+                follow_file(
+                    harness,
+                    &transcript,
+                    source.from_bytes,
+                    &mut normalizer,
+                    stop,
+                )
+            });
         if let Err(error) = followed {
             normalizer.tally.error = Some(format!("{error:#}"));
         }
@@ -276,11 +288,15 @@ fn await_transcript(
 fn follow_file(
     harness: &dyn Harness,
     transcript: &Path,
+    from_bytes: u64,
     normalizer: &mut Normalizer,
     stop: &AtomicBool,
 ) -> Result<()> {
     let mut source =
         File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
+    source
+        .seek(SeekFrom::Start(from_bytes))
+        .with_context(|| format!("seeking in {}", transcript.display()))?;
     let mut pending = Vec::new();
     loop {
         let finished = stop.load(Ordering::SeqCst);
@@ -312,6 +328,13 @@ fn header(seed: &Seed, start: Option<&SessionStart>) -> Header {
     extra.insert(
         "profile".to_string(),
         seed.profile.clone().map(Value::from).unwrap_or(Value::Null),
+    );
+    extra.insert(
+        "resumedFrom".to_string(),
+        seed.resumed_from
+            .clone()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
     extra.insert(
         "harnessSessionId".to_string(),
@@ -372,12 +395,16 @@ fn create_private_file(path: &Path) -> Result<File> {
 pub struct Summary {
     pub id: String,
     pub harness: String,
-    #[serde(rename = "harnessSessionId")]
+    #[serde(default, rename = "harnessSessionId")]
     pub harness_session_id: Option<String>,
     pub model: String,
+    #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default)]
     pub profile: Option<String>,
     pub mode: String,
+    #[serde(default, rename = "resumedFrom")]
+    pub resumed_from: Option<String>,
     pub start: String,
     pub end: String,
     #[serde(rename = "durationMs")]

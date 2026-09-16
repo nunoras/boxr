@@ -20,7 +20,7 @@ use clap::{Args, Parser, Subcommand};
 use config::Config;
 use detached::{LaunchFile, State};
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
-use harness::LaunchRequest;
+use harness::{LaunchMode, LaunchRequest};
 use ledger::Summary;
 use output::{one_line, Toon, MESSAGE_LIMIT};
 use session::Session;
@@ -129,6 +129,13 @@ enum Command {
         #[arg(value_name = "ID")]
         id: String,
     },
+    Resume {
+        #[arg(value_name = "ID")]
+        id: String,
+
+        #[arg(value_name = "PROMPT")]
+        prompt: String,
+    },
     #[command(name = "__supervise", hide = true)]
     Supervise {
         #[arg(value_name = "ID")]
@@ -235,6 +242,7 @@ fn dispatch() -> Result<i32> {
         Some(Command::Wait { timeout, id }) => wait(&id, timeout),
         Some(Command::Tail { id }) => tail(&id),
         Some(Command::Stop { id }) => stop(&id),
+        Some(Command::Resume { id, prompt }) => resume(&id, &prompt),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
     }
@@ -271,6 +279,7 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         effort,
         prompt,
         cwd,
+        mode: LaunchMode::Fresh,
     };
 
     if cli.detach {
@@ -310,8 +319,10 @@ fn detach(
             effort: request.effort.clone(),
             prompt: request.prompt.clone(),
             cwd: request.cwd.clone(),
-            account: account.map(str::to_string),
             started_millis: clock::now_millis() as u64,
+            mode: "headless".to_string(),
+            profile: account.map(str::to_string),
+            resumed_from: None,
         },
     )?;
     let mut supervisor = match detached::spawn_supervisor(&session) {
@@ -519,7 +530,7 @@ fn supervise(id: &str) -> Result<i32> {
             )],
         )
     })?;
-    let account = launch.account.clone();
+    let account = launch.profile.clone();
     let profile = match &account {
         Some(name) => Some(profile_for(adapter.as_ref(), &home, &launch.harness, name)?),
         None => None,
@@ -529,6 +540,7 @@ fn supervise(id: &str) -> Result<i32> {
         effort: launch.effort,
         prompt: launch.prompt,
         cwd: launch.cwd,
+        mode: LaunchMode::Fresh,
     };
     let launch = run::adopt(&adapter, &request, session)?;
     let report = run::headless(
@@ -732,6 +744,99 @@ fn render_stopped(session: &Session, summary: &Summary, action: &str) -> String 
     toon.render()
 }
 
+fn resume(id: &str, prompt: &str) -> Result<i32> {
+    let home = home::boxr_home()?;
+    if let State::Running(_) = detached::state(&home, id)? {
+        return Err(Fail::usage(
+            format!("session {id} is still running"),
+            vec![
+                format!("Run `boxr wait {id}` to block until it finishes"),
+                format!("Run `boxr stop {id}` to end it, then resume the session"),
+            ],
+        )
+        .into());
+    }
+    let summary = ledger::read_summary(&home, id)?;
+    let harness_session_id = summary.harness_session_id.clone().ok_or_else(|| {
+        Fail::usage(
+            format!("session {id} recorded no harness session id to resume"),
+            vec![format!(
+                "Run `boxr show {id}` to check what the session recorded"
+            )],
+        )
+    })?;
+    let adapter = harness::lookup(&summary.harness).ok_or_else(|| {
+        Fail::usage(
+            format!("unknown harness `{}`", summary.harness),
+            vec![format!(
+                "Known harnesses: {}",
+                harness::known_ids().join(", ")
+            )],
+        )
+    })?;
+    let account = summary.profile.clone();
+    let profile = match &account {
+        Some(name) => Some(profile_for(
+            adapter.as_ref(),
+            &home,
+            &summary.harness,
+            name,
+        )?),
+        None => None,
+    };
+    let parent = run::harness_session_of(&Session::open(&home, id));
+    let from_bytes = run::transcript_size(
+        adapter.as_ref(),
+        &parent,
+        &harness_session_id,
+        profile.as_deref(),
+    )
+    .map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec![
+                format!("Resuming needs the harness transcript of {harness_session_id}"),
+                format!("Run `boxr show {id}` to check the session"),
+            ],
+        )
+    })?;
+    let request = LaunchRequest {
+        model: summary.model.clone(),
+        effort: summary.effort.clone(),
+        prompt: prompt.to_string(),
+        cwd: resume_cwd(&home, id)?,
+        mode: LaunchMode::Resume { harness_session_id },
+    };
+    let continuation = run::Continuation {
+        parent: id.to_string(),
+        profile: account.clone(),
+        from_bytes,
+    };
+    let launch = run::resume(&adapter, &request, &continuation, &home)?;
+    let report = run::headless(
+        &adapter,
+        &request,
+        run::Account {
+            name: account.as_deref(),
+            dir: profile.as_deref(),
+        },
+        launch,
+    )?;
+    print!(
+        "{}",
+        report::render(&report, &Session::open(&home, &report.id))
+    );
+    Ok(report::exit_code(&report))
+}
+
+fn resume_cwd(home: &Path, id: &str) -> Result<PathBuf> {
+    let session = Session::open(home, id);
+    if let Some(launch) = detached::read_launch(&session)? {
+        return Ok(launch.cwd);
+    }
+    std::env::current_dir().context("reading the current directory")
+}
+
 fn show(id: &str) -> Result<i32> {
     let home = home::boxr_home()?;
     let summary = ledger::read_summary(&home, id).map_err(|error| {
@@ -751,9 +856,10 @@ fn show(id: &str) -> Result<i32> {
         .field("raw", &session.raw_dir().display().to_string());
     toon.list(
         "help",
-        &[format!(
-            "Run `boxr export --atif {id}` to write a standard ATIF trajectory"
-        )],
+        &[
+            format!("Run `boxr export --atif {id}` to write a standard ATIF trajectory"),
+            format!("Run `boxr resume {id} \"<prompt>\"` to continue the session"),
+        ],
     );
     print!("{}", toon.render());
     Ok(EXIT_OK)
@@ -774,8 +880,11 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
             summary.effort.as_deref().unwrap_or("harness-default"),
         )
         .field("profile", summary.profile.as_deref().unwrap_or("default"))
-        .field("mode", &summary.mode)
-        .field("start", &summary.start)
+        .field("mode", &summary.mode);
+    if let Some(parent) = &summary.resumed_from {
+        toon.field("resumedFrom", parent);
+    }
+    toon.field("start", &summary.start)
         .field("end", &summary.end)
         .number("durationMs", summary.duration_ms)
         .number("exitCode", summary.exit_code)

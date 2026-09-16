@@ -8,11 +8,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
+pub enum LaunchMode {
+    Fresh,
+    Resume { harness_session_id: String },
+}
+
+#[derive(Debug, Clone)]
 pub struct LaunchRequest {
     pub model: String,
     pub effort: Option<String>,
     pub prompt: String,
     pub cwd: PathBuf,
+    pub mode: LaunchMode,
 }
 
 #[derive(Debug, Clone)]

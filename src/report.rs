@@ -15,6 +15,10 @@ pub enum Ledger {
     Interrupted,
 }
 
+fn default_headless_mode() -> String {
+    "headless".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
@@ -23,10 +27,14 @@ pub struct Report {
     pub harness: String,
     pub model: String,
     pub effort: Option<String>,
-    #[serde(default)]
-    pub account: Option<String>,
     #[serde(rename = "harnessSessionId")]
     pub harness_session_id: Option<String>,
+    #[serde(default = "default_headless_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default, rename = "resumedFrom")]
+    pub resumed_from: Option<String>,
     pub start: String,
     pub end: String,
     pub duration_ms: u64,
@@ -80,13 +88,16 @@ pub fn render(report: &Report, session: &Session) -> String {
         )
         .field(
             "account",
-            report.account.as_deref().unwrap_or("harness-default"),
+            report.profile.as_deref().unwrap_or("harness-default"),
         )
         .field(
             "harnessSessionId",
             report.harness_session_id.as_deref().unwrap_or("unknown"),
-        )
-        .number("durationMs", report.duration_ms)
+        );
+    if let Some(parent) = &report.resumed_from {
+        toon.field("resumedFrom", parent);
+    }
+    toon.number("durationMs", report.duration_ms)
         .number("exitCode", report.exit_code)
         .field(
             "message",
@@ -136,6 +147,10 @@ pub fn render(report: &Report, session: &Session) -> String {
         if report.summary_error.is_none() {
             lines.push(format!(
                 "Run `boxr show {}` to read the session summary",
+                report.id
+            ));
+            lines.push(format!(
+                "Run `boxr resume {} \"<prompt>\"` to continue it",
                 report.id
             ));
         }
