@@ -37,6 +37,20 @@ impl Toon {
     pub fn render(&self) -> String {
         self.body.clone()
     }
+
+    pub fn table(&mut self, name: &str, columns: &[&str], rows: &[Vec<String>]) -> &mut Toon {
+        let _ = writeln!(
+            self.body,
+            "{name}[{}]{{{}}}:",
+            rows.len(),
+            columns.join(",")
+        );
+        for row in rows {
+            let cells: Vec<String> = row.iter().map(|cell| scalar(cell)).collect();
+            let _ = writeln!(self.body, "  {}", cells.join(","));
+        }
+        self
+    }
 }
 
 pub fn scalar(value: &str) -> String {

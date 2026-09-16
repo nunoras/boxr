@@ -60,15 +60,19 @@ impl Follower {
         session: HarnessSession,
         path: PathBuf,
         seed: Seed,
+        account: Option<PathBuf>,
     ) -> Follower {
         let (sender, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let handle = thread::spawn(move || {
             let mut tally = Tally::default();
-            if let Err(error) =
-                capture(harness, &session, &path, &seed, receiver, &flag, &mut tally)
-            {
+            let source = Source {
+                harness,
+                session,
+                account,
+            };
+            if let Err(error) = capture(&source, &path, &seed, receiver, &flag, &mut tally) {
                 tally.error.get_or_insert_with(|| format!("{error:#}"));
             }
             tally
@@ -94,9 +98,14 @@ impl Follower {
     }
 }
 
-fn capture(
+struct Source {
     harness: Arc<dyn Harness>,
-    session: &HarnessSession,
+    session: HarnessSession,
+    account: Option<PathBuf>,
+}
+
+fn capture(
+    source: &Source,
     path: &Path,
     seed: &Seed,
     receiver: Receiver<SessionStart>,
@@ -114,10 +123,9 @@ fn capture(
     normalizer.write(&header(seed, start.as_ref()))?;
 
     if let Some(start) = start {
-        let followed = await_transcript(harness.as_ref(), session, &start.harness_session_id, stop)
-            .and_then(|transcript| {
-                follow_file(harness.as_ref(), &transcript, &mut normalizer, stop)
-            });
+        let harness = source.harness.as_ref();
+        let followed = await_transcript(source, &start.harness_session_id, stop)
+            .and_then(|transcript| follow_file(harness, &transcript, &mut normalizer, stop));
         if let Err(error) = followed {
             normalizer.tally.error = Some(format!("{error:#}"));
         }
@@ -240,14 +248,17 @@ fn await_start(receiver: &Receiver<SessionStart>, stop: &AtomicBool) -> Option<S
 }
 
 fn await_transcript(
-    harness: &dyn Harness,
-    session: &HarnessSession,
+    source: &Source,
     harness_session_id: &str,
     stop: &AtomicBool,
 ) -> Result<PathBuf> {
     let mut deadline = None;
     loop {
-        if let Ok(path) = harness.transcript(session, harness_session_id) {
+        if let Ok(path) = source.harness.transcript(
+            &source.session,
+            harness_session_id,
+            source.account.as_deref(),
+        ) {
             return Ok(path);
         }
         if stop.load(Ordering::SeqCst) {

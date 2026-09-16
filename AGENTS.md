@@ -8,7 +8,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - New harnesses implement the `Harness` trait in `src/harness/mod.rs`; the process runner in `src/run.rs` stays harness-agnostic.
   A harness that must be told where to write its transcript gets `HarnessSession` in `command` and `transcript`, and shared JSON block helpers live in `src/harness/json.rs`.
   Transcript following lives in `src/ledger.rs` and is harness-agnostic too: a harness only maps one transcript line to one ATIF step or a batch of tool results through `transcript_entry`, and the follower folds results into the calling step (see "Tool calls in the normalized layer" in `docs/design.md`).
+  A harness adapter also provides its own `login_command` and its `config_dir_env` override, which is what account profiles isolate through; a harness without one cannot be given a profile.
 - The normalized ledger targets ATIF v1.8 (`src/atif.rs`); the schema is the Harbor RFC at https://www.harborframework.com/docs/agents/trajectory-format.
+- Account profiles live at `accounts/<harness>/<name>` under the boxr home (`src/account.rs`). boxr only ever sets the config-dir override and never touches the user's own harness config.
 - Output is axi-style TOON on stdout with `help[]` next-step lines; exit codes are defined in `src/fail.rs`.
 - No comments in code, per the repo's coding standard.
 

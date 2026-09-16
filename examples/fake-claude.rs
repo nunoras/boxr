@@ -14,8 +14,20 @@ const DELAY_ENV: &str = "BOXR_FAKE_CLAUDE_DELAY_MS";
 const NO_TRANSCRIPT_ENV: &str = "BOXR_FAKE_CLAUDE_NO_TRANSCRIPT";
 const HANG_AFTER_ENV: &str = "BOXR_FAKE_CLAUDE_HANG_AFTER";
 const PID_ENV: &str = "BOXR_FAKE_CLAUDE_PID";
+const CONFIG_OUT_ENV: &str = "BOXR_FAKE_CLAUDE_CONFIG_OUT";
 
 fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if let Some(path) = env::var_os(ARGS_ENV) {
+        if let Err(error) = fs::write(PathBuf::from(path), args.join("\n")) {
+            eprintln!("cannot record arguments: {error}");
+            return ExitCode::from(97);
+        }
+    }
+    if args.first().map(String::as_str) == Some("auth") {
+        return login();
+    }
+
     let fixture = match env::var_os(FIXTURE_ENV) {
         Some(value) => PathBuf::from(value),
         None => {
@@ -23,13 +35,6 @@ fn main() -> ExitCode {
             return ExitCode::from(97);
         }
     };
-    if let Some(path) = env::var_os(ARGS_ENV) {
-        let args: Vec<String> = env::args().skip(1).collect();
-        if let Err(error) = fs::write(PathBuf::from(path), args.join("\n")) {
-            eprintln!("cannot record arguments: {error}");
-            return ExitCode::from(97);
-        }
-    }
 
     let mut prompt = String::new();
     if let Err(error) = std::io::stdin().read_to_string(&mut prompt) {
@@ -84,12 +89,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let delay = Duration::from_millis(
-        env::var(DELAY_ENV)
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(5),
-    );
+    let delay = delay();
 
     let mut transcript_file = if env::var_os(NO_TRANSCRIPT_ENV).is_some() {
         None
@@ -130,6 +130,50 @@ fn main() -> ExitCode {
         sleep(delay);
     }
 
+    exit_code()
+}
+
+fn login() -> ExitCode {
+    let config_dir = match config_dir() {
+        Some(dir) => dir,
+        None => {
+            eprintln!("cannot locate a claude config directory");
+            return ExitCode::from(97);
+        }
+    };
+    echo_config_dir(&config_dir);
+    if let Err(error) = fs::create_dir_all(&config_dir) {
+        eprintln!("cannot create the config directory: {error}");
+        return ExitCode::from(97);
+    }
+    if let Err(error) = fs::write(
+        config_dir.join("login.marker"),
+        config_dir.display().to_string(),
+    ) {
+        eprintln!("cannot write the login marker: {error}");
+        return ExitCode::from(97);
+    }
+    sleep(delay());
+
+    exit_code()
+}
+
+fn echo_config_dir(config_dir: &std::path::Path) {
+    if let Some(path) = env::var_os(CONFIG_OUT_ENV) {
+        let _ = fs::write(PathBuf::from(path), config_dir.display().to_string());
+    }
+}
+
+fn delay() -> Duration {
+    Duration::from_millis(
+        env::var(DELAY_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5),
+    )
+}
+
+fn exit_code() -> ExitCode {
     let code: u8 = env::var(EXIT_ENV)
         .ok()
         .and_then(|value| value.parse().ok())
@@ -158,10 +202,8 @@ fn session_id(stream: &str) -> Option<String> {
 }
 
 fn transcript_path(session_id: &str) -> Option<PathBuf> {
-    let config_dir = match env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => home_dir()?.join(".claude"),
-    };
+    let config_dir = config_dir()?;
+    echo_config_dir(&config_dir);
     let cwd = env::current_dir().ok()?;
     let slug: String = cwd
         .to_string_lossy()
@@ -174,6 +216,17 @@ fn transcript_path(session_id: &str) -> Option<PathBuf> {
             .join(slug)
             .join(format!("{session_id}.jsonl")),
     )
+}
+
+fn config_dir() -> Option<PathBuf> {
+    match env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(value) if !value.is_empty() => Some(PathBuf::from(value)),
+        _ => {
+            let dir = home_dir()?.join(".claude");
+            echo_config_dir(&dir);
+            Some(dir)
+        }
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {

@@ -4,7 +4,7 @@ use crate::atif::{Metrics, ObservationResult, Step, ToolCall};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Pi;
 
@@ -33,6 +33,7 @@ impl Harness for Pi {
             program: "pi".to_string(),
             args,
             stdin: Some(request.prompt.clone()),
+            env: Vec::new(),
         })
     }
 
@@ -55,7 +56,12 @@ impl Harness for Pi {
         }
     }
 
-    fn transcript(&self, session: &HarnessSession, harness_session_id: &str) -> Result<PathBuf> {
+    fn transcript(
+        &self,
+        session: &HarnessSession,
+        harness_session_id: &str,
+        _account: Option<&Path>,
+    ) -> Result<PathBuf> {
         let suffix = format!("_{harness_session_id}.jsonl");
         let entries = fs::read_dir(&session.dir)
             .with_context(|| format!("reading {}", session.dir.display()))?;
