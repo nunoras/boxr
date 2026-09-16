@@ -1,4 +1,5 @@
-use super::{Harness, HarnessCommand, LaunchRequest, StreamEvent, TranscriptEntry};
+use super::json::{joined_reasoning, joined_text, number_at, text_at};
+use super::{Harness, HarnessCommand, HarnessSession, LaunchRequest, StreamEvent, TranscriptEntry};
 use crate::atif::{Metrics, ObservationResult, Step, ToolCall};
 use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
@@ -16,7 +17,11 @@ impl Harness for ClaudeCode {
         "claude"
     }
 
-    fn command(&self, request: &LaunchRequest) -> Result<HarnessCommand> {
+    fn command(
+        &self,
+        request: &LaunchRequest,
+        _session: &HarnessSession,
+    ) -> Result<HarnessCommand> {
         let mut args = vec!["--model".to_string(), request.model.clone()];
         if let Some(effort) = &request.effort {
             args.push("--effort".to_string());
@@ -55,7 +60,7 @@ impl Harness for ClaudeCode {
         }
     }
 
-    fn transcript(&self, harness_session_id: &str) -> Result<PathBuf> {
+    fn transcript(&self, _session: &HarnessSession, harness_session_id: &str) -> Result<PathBuf> {
         let projects = config_dir(CONFIG_DIR_ENV, DEFAULT_CONFIG_DIR)
             .ok_or_else(|| {
                 anyhow!("cannot locate the claude config directory; set {CONFIG_DIR_ENV}")
@@ -110,7 +115,7 @@ fn assistant_entry(value: &Value) -> Option<TranscriptEntry> {
     let message = value.get("message")?;
     let parts = message.get("content")?.as_array()?;
     let mut step = Step::new("agent", joined_text(parts));
-    step.reasoning_content = reasoning(parts);
+    step.reasoning_content = joined_reasoning(parts);
     let calls = tool_calls(parts);
     if !calls.is_empty() {
         step.tool_calls = Some(calls);
@@ -126,25 +131,6 @@ fn assistant_entry(value: &Value) -> Option<TranscriptEntry> {
         step: Box::new(step),
         response_id: text_at(message, "id"),
     })
-}
-
-fn joined_text(parts: &[Value]) -> String {
-    parts
-        .iter()
-        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn reasoning(parts: &[Value]) -> Option<String> {
-    let thoughts = parts
-        .iter()
-        .filter(|part| part.get("type").and_then(Value::as_str) == Some("thinking"))
-        .filter_map(|part| part.get("thinking").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!thoughts.is_empty()).then_some(thoughts)
 }
 
 fn tool_calls(parts: &[Value]) -> Vec<ToolCall> {
@@ -179,8 +165,8 @@ fn result_content(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Array(parts)) => joined_text(parts),
+        Some(Value::Null) | None => String::new(),
         Some(other) => other.to_string(),
-        None => String::new(),
     }
 }
 
@@ -203,16 +189,4 @@ fn metrics(usage: &Value) -> Option<Metrics> {
         cost_usd: None,
         extra: (!extra.is_empty()).then_some(extra),
     })
-}
-
-fn number_at(value: &Value, key: &str) -> u64 {
-    value.get(key).and_then(Value::as_u64).unwrap_or(0)
-}
-
-fn text_at(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|text| !text.is_empty())
 }

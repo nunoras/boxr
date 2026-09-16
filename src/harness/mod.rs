@@ -1,4 +1,6 @@
 pub mod claude;
+pub mod json;
+pub mod pi;
 
 use crate::atif::{ObservationResult, Step};
 use anyhow::Result;
@@ -11,6 +13,12 @@ pub struct LaunchRequest {
     pub effort: Option<String>,
     pub prompt: String,
     pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct HarnessSession {
+    pub session_id: String,
+    pub dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -44,19 +52,20 @@ pub enum TranscriptEntry {
 
 pub trait Harness: Send + Sync {
     fn id(&self) -> &'static str;
-    fn command(&self, request: &LaunchRequest) -> Result<HarnessCommand>;
+    fn command(&self, request: &LaunchRequest, session: &HarnessSession) -> Result<HarnessCommand>;
     fn parse_event(&self, line: &str) -> StreamEvent;
-    fn transcript(&self, harness_session_id: &str) -> Result<PathBuf>;
+    fn transcript(&self, session: &HarnessSession, harness_session_id: &str) -> Result<PathBuf>;
     fn transcript_entry(&self, line: &str) -> Option<TranscriptEntry>;
 }
 
 pub fn lookup(id: &str) -> Option<Arc<dyn Harness>> {
     match id {
         "claude" => Some(Arc::new(claude::ClaudeCode)),
+        "pi" => Some(Arc::new(pi::Pi)),
         _ => None,
     }
 }
 
 pub fn known_ids() -> &'static [&'static str] {
-    &["claude"]
+    &["claude", "pi"]
 }

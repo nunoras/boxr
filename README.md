@@ -11,7 +11,8 @@ It launches agents across harnesses and isolated account profiles.
 It keeps a local ledger of every session, so you can see which models you use for what, where tokens go, and test prompt changes against real scenarios instead of guessing.
 
 Status: walking skeleton.
-Headless Claude Code launches run and land in the raw ledger under the boxr home (`~/.boxr`, or `BOXR_HOME` when set).
+Headless Claude Code and pi launches run and land in the raw ledger under the boxr home (`~/.boxr`, or `BOXR_HOME` when set).
+pi models are given in pi's `provider/id` form, for example `--harness pi --model xai/grok-4.5`, and `--effort` becomes pi's thinking level.
 While a session runs, boxr follows the harness transcript and writes the normalized ledger live: `normalized.jsonl` is a header line, one ATIF step per line, and a closing line of final metrics.
 Each finished session appends one line to `summary.jsonl` in the boxr home.
 `boxr show <id>` prints that summary, and `boxr export --atif <id>` writes a single-document ATIF trajectory (schema ATIF-v1.8).
