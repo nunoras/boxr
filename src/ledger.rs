@@ -294,10 +294,15 @@ fn follow_file(
 ) -> Result<()> {
     let mut source =
         File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
+    let len = source
+        .metadata()
+        .with_context(|| format!("reading {}", transcript.display()))?
+        .len();
     source
         .seek(SeekFrom::Start(from_bytes))
         .with_context(|| format!("seeking in {}", transcript.display()))?;
-    let mut dropping_partial = from_bytes > 0 && !starts_a_line(transcript, from_bytes)?;
+    let mut dropping_partial =
+        from_bytes > 0 && from_bytes < len && !starts_a_line(transcript, from_bytes)?;
     let mut pending = Vec::new();
     loop {
         let finished = stop.load(Ordering::SeqCst);
@@ -413,13 +418,15 @@ fn create_private_file(path: &Path) -> Result<File> {
 pub struct Summary {
     pub id: String,
     pub harness: String,
-    #[serde(rename = "harnessSessionId")]
+    #[serde(default, rename = "harnessSessionId")]
     pub harness_session_id: Option<String>,
     pub model: String,
+    #[serde(default)]
     pub effort: Option<String>,
+    #[serde(default)]
     pub profile: Option<String>,
     pub mode: String,
-    #[serde(rename = "resumedFrom")]
+    #[serde(default, rename = "resumedFrom")]
     pub resumed_from: Option<String>,
     pub start: String,
     pub end: String,

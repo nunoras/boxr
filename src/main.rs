@@ -319,8 +319,10 @@ fn detach(
             effort: request.effort.clone(),
             prompt: request.prompt.clone(),
             cwd: request.cwd.clone(),
-            account: account.map(str::to_string),
             started_millis: clock::now_millis() as u64,
+            mode: "headless".to_string(),
+            profile: account.map(str::to_string),
+            resumed_from: None,
         },
     )?;
     let mut supervisor = match detached::spawn_supervisor(&session) {
@@ -528,7 +530,7 @@ fn supervise(id: &str) -> Result<i32> {
             )],
         )
     })?;
-    let account = launch.account.clone();
+    let account = launch.profile.clone();
     let profile = match &account {
         Some(name) => Some(profile_for(adapter.as_ref(), &home, &launch.harness, name)?),
         None => None,

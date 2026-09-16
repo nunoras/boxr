@@ -168,8 +168,10 @@ pub fn headless(
             effort: request.effort.clone(),
             prompt: request.prompt.clone(),
             cwd: request.cwd.clone(),
-            account: account.name.map(str::to_string),
             started_millis: started_at as u64,
+            mode: mode.clone(),
+            profile: profile.clone(),
+            resumed_from: resumed_from.clone(),
         },
     )?;
     detached::record_supervisor(&session, std::process::id())?;
@@ -338,8 +340,9 @@ pub fn headless(
         harness: harness.id().to_string(),
         model: request.model.clone(),
         effort: request.effort.clone(),
-        account: account.name.map(str::to_string),
         harness_session_id,
+        mode: summary.mode.clone(),
+        profile: summary.profile.clone(),
         resumed_from,
         start: summary.start.clone(),
         end: summary.end.clone(),
