@@ -175,6 +175,12 @@ impl Harness {
         self.command(args, bin_dir).output().expect("boxr runs")
     }
 
+    pub fn run_with_fixture(&self, fixture: &'static str, args: &[&str]) -> Output {
+        let mut command = self.command(args, Some(&self.bin_dir));
+        command.env("BOXR_FAKE_CLAUDE_FIXTURE", fixture_dir(fixture));
+        command.output().expect("boxr runs")
+    }
+
     pub fn command(&self, args: &[&str], bin_dir: Option<&Path>) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxr"));
         command

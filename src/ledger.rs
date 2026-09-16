@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -37,6 +37,7 @@ pub struct Seed {
     pub effort: Option<String>,
     pub mode: String,
     pub profile: Option<String>,
+    pub resumed_from: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -61,6 +62,7 @@ impl Follower {
         path: PathBuf,
         seed: Seed,
         account: Option<PathBuf>,
+        from_bytes: u64,
     ) -> Follower {
         let (sender, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -71,6 +73,7 @@ impl Follower {
                 harness,
                 session,
                 account,
+                from_bytes,
             };
             if let Err(error) = capture(&source, &path, &seed, receiver, &flag, &mut tally) {
                 tally.error.get_or_insert_with(|| format!("{error:#}"));
@@ -102,6 +105,7 @@ struct Source {
     harness: Arc<dyn Harness>,
     session: HarnessSession,
     account: Option<PathBuf>,
+    from_bytes: u64,
 }
 
 fn capture(
@@ -124,8 +128,16 @@ fn capture(
 
     if let Some(start) = start {
         let harness = source.harness.as_ref();
-        let followed = await_transcript(source, &start.harness_session_id, stop)
-            .and_then(|transcript| follow_file(harness, &transcript, &mut normalizer, stop));
+        let followed =
+            await_transcript(source, &start.harness_session_id, stop).and_then(|transcript| {
+                follow_file(
+                    harness,
+                    &transcript,
+                    source.from_bytes,
+                    &mut normalizer,
+                    stop,
+                )
+            });
         if let Err(error) = followed {
             normalizer.tally.error = Some(format!("{error:#}"));
         }
@@ -276,11 +288,16 @@ fn await_transcript(
 fn follow_file(
     harness: &dyn Harness,
     transcript: &Path,
+    from_bytes: u64,
     normalizer: &mut Normalizer,
     stop: &AtomicBool,
 ) -> Result<()> {
     let mut source =
         File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
+    source
+        .seek(SeekFrom::Start(from_bytes))
+        .with_context(|| format!("seeking in {}", transcript.display()))?;
+    let mut dropping_partial = from_bytes > 0 && !starts_a_line(transcript, from_bytes)?;
     let mut pending = Vec::new();
     loop {
         let finished = stop.load(Ordering::SeqCst);
@@ -289,6 +306,10 @@ fn follow_file(
             .with_context(|| format!("reading {}", transcript.display()))?;
         while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=index).collect();
+            if dropping_partial {
+                dropping_partial = false;
+                continue;
+            }
             if let Some(entry) = harness.transcript_entry(String::from_utf8_lossy(&line).trim_end())
             {
                 normalizer.accept(entry)?;
@@ -299,6 +320,19 @@ fn follow_file(
         }
         thread::sleep(POLL);
     }
+}
+
+fn starts_a_line(transcript: &Path, offset: u64) -> Result<bool> {
+    let mut source =
+        File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
+    source
+        .seek(SeekFrom::Start(offset - 1))
+        .with_context(|| format!("seeking in {}", transcript.display()))?;
+    let mut previous = [0u8; 1];
+    source
+        .read_exact(&mut previous)
+        .with_context(|| format!("reading {}", transcript.display()))?;
+    Ok(previous[0] == b'\n')
 }
 
 fn header(seed: &Seed, start: Option<&SessionStart>) -> Header {
@@ -312,6 +346,13 @@ fn header(seed: &Seed, start: Option<&SessionStart>) -> Header {
     extra.insert(
         "profile".to_string(),
         seed.profile.clone().map(Value::from).unwrap_or(Value::Null),
+    );
+    extra.insert(
+        "resumedFrom".to_string(),
+        seed.resumed_from
+            .clone()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
     extra.insert(
         "harnessSessionId".to_string(),
@@ -378,6 +419,8 @@ pub struct Summary {
     pub effort: Option<String>,
     pub profile: Option<String>,
     pub mode: String,
+    #[serde(rename = "resumedFrom")]
+    pub resumed_from: Option<String>,
     pub start: String,
     pub end: String,
     #[serde(rename = "durationMs")]

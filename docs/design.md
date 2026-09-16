@@ -35,8 +35,17 @@ The harness runs non-interactively and boxr reads its structured event stream.
 By default the call blocks and prints a short TOON result: status, session id, trimmed final message, tokens, cost, duration, and next-step `help[]` lines.
 `--detach` returns the session id immediately and the session keeps running in the background under boxr.
 Detached sessions are managed with `boxr ps`, `boxr wait <id>` (optional timeout), `boxr status <id>`, `boxr tail <id>` and `boxr stop <id>`.
-`boxr resume <id> "<prompt>"` continues a session.
+`boxr resume <id> "<prompt>"` continues a finished session.
 If boxr crashes, the harness process is killed rather than orphaned, and the session is marked interrupted.
+
+#### Resuming a finished session
+
+`boxr resume <id> "<prompt>"` continues a finished session with a new prompt, using the harness, model, effort, profile and harness session id the original recorded, so the harness resumes its own conversation.
+Claude Code is driven with `--resume <harness session id>` and the prompt on plain stdin, because one prompt continues one conversation; streaming input stays available for a later capability that sends follow-ups into a running session.
+Like a foreground launch, resume blocks until the continuation finishes and prints the same result shape.
+The continuation is a new session with its own id, its own raw, normalized and summary records, and `mode: resume`, linked to the original through `resumedFrom` in the normalized header, the summary line and the printed result.
+Its ledger starts at the byte offset the harness transcript had already reached when the continuation launched, so the original steps are recorded once, in the original session, and the original session's files are never rewritten.
+Resuming an unknown session, a session that is still running, a session with no recorded harness session id, or one whose harness transcript is gone is a usage error that names which of those it was.
 
 #### Supervising a detached session
 

@@ -155,7 +155,7 @@ fn pi_launch_prints_a_toon_result_and_exits_zero() {
     );
     assert!(stdout.contains("durationMs: "), "{stdout}");
     assert!(stdout.contains("ledger: recorded"), "{stdout}");
-    assert!(stdout.contains("help[2]:"), "{stdout}");
+    assert!(stdout.contains("help[3]:"), "{stdout}");
     assert!(session_id_of(&stdout).starts_with("s-"), "{stdout}");
 }
 

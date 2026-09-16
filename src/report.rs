@@ -27,6 +27,8 @@ pub struct Report {
     pub account: Option<String>,
     #[serde(rename = "harnessSessionId")]
     pub harness_session_id: Option<String>,
+    #[serde(rename = "resumedFrom")]
+    pub resumed_from: Option<String>,
     pub start: String,
     pub end: String,
     pub duration_ms: u64,
@@ -85,8 +87,11 @@ pub fn render(report: &Report, session: &Session) -> String {
         .field(
             "harnessSessionId",
             report.harness_session_id.as_deref().unwrap_or("unknown"),
-        )
-        .number("durationMs", report.duration_ms)
+        );
+    if let Some(parent) = &report.resumed_from {
+        toon.field("resumedFrom", parent);
+    }
+    toon.number("durationMs", report.duration_ms)
         .number("exitCode", report.exit_code)
         .field(
             "message",
@@ -136,6 +141,10 @@ pub fn render(report: &Report, session: &Session) -> String {
         if report.summary_error.is_none() {
             lines.push(format!(
                 "Run `boxr show {}` to read the session summary",
+                report.id
+            ));
+            lines.push(format!(
+                "Run `boxr resume {} \"<prompt>\"` to continue it",
                 report.id
             ));
         }
