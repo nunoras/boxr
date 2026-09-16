@@ -45,6 +45,7 @@ Claude Code is driven with `--resume <harness session id>` and the prompt on pla
 Like a foreground launch, resume blocks until the continuation finishes and prints the same result shape.
 The continuation is a new session with its own id, its own raw, normalized and summary records, and `mode: resume`, linked to the original through `resumedFrom` in the normalized header, the summary line and the printed result.
 Its ledger starts at the byte offset the harness transcript had already reached when the continuation launched, so the original steps are recorded once, in the original session, and the original session's files are never rewritten.
+The launch record stores `mode`, `profile` and `resumedFrom` with the rest of the launch, so a supervisor killed before the report and summary are written still reconstructs an interrupted continuation linked to its parent.
 Resuming an unknown session, a session that is still running, a session with no recorded harness session id, or one whose harness transcript is gone is a usage error that names which of those it was.
 
 #### Supervising a detached session
@@ -105,10 +106,10 @@ Three layers per session:
 1. Raw: the harness's own transcript and stream, copied verbatim and never edited.
    It is the audit trail and can be re-normalized when parsers improve.
 2. Normalized: JSONL where each line is one [ATIF](https://www.harborframework.com/docs/agents/trajectory-format) step object, plus a header line (session and agent info) and a closing line (final metrics).
-   Our own fields (profile, subscription, effort, kind) go in ATIF `extra`.
+   Our own fields (profile, subscription, effort, kind, mode, resumedFrom) go in ATIF `extra`.
    `boxr export --atif <id>` wraps the lines into a standard ATIF document.
    ATIF requires at least one step, so exporting a session that recorded none is refused as a usage error rather than written as an invalid document.
-3. Summary: one line per session with harness, model, effort, profile, subscription, start, end, tokens, cost, status, kind and outcomes.
+3. Summary: one line per session with harness, model, effort, profile, mode, resumedFrom, subscription, start, end, tokens, cost, status, kind and outcomes.
    All analytics query this layer.
    Status is `ok` for a zero exit and `interrupted` when the harness was stopped from outside or by boxr itself: an external-stop signal (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGKILL`) on Unix, Ctrl-C or Ctrl-Break (`STATUS_CONTROL_C_EXIT`) on Windows, or a termination boxr caused on either platform.
    A crash signal such as `SIGSEGV` or `SIGABRT` is not an interruption.
