@@ -409,14 +409,64 @@ pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
 }
 
 pub fn read_summary(home: &Path, id: &str) -> Result<Summary> {
+    find_summary(home, id)?.ok_or_else(|| anyhow!("no session {id} in the ledger"))
+}
+
+pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
     let path = home.join(SUMMARY_FILE);
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))
-        .map_err(|_| anyhow!("no session {id} in the ledger"))?;
-    text.lines()
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
+        }
+    };
+    Ok(text
+        .lines()
         .filter_map(|line| serde_json::from_str::<Summary>(line).ok())
-        .find(|summary| summary.id == id)
-        .ok_or_else(|| anyhow!("no session {id} in the ledger"))
+        .find(|summary| summary.id == id))
+}
+
+pub fn totals(normalized: &Path) -> Tally {
+    let mut tally = Tally::default();
+    let Ok(text) = fs::read_to_string(normalized) else {
+        return tally;
+    };
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(metrics) = value.get("final_metrics") {
+            return serde_json::from_value::<FinalMetrics>(metrics.clone())
+                .map(|metrics| Tally {
+                    steps: metrics.total_steps,
+                    prompt_tokens: metrics.total_prompt_tokens,
+                    completion_tokens: metrics.total_completion_tokens,
+                    cached_tokens: metrics.total_cached_tokens,
+                    error: None,
+                })
+                .unwrap_or(tally);
+        }
+        if value.get("step_id").is_none() {
+            continue;
+        }
+        tally.steps += 1;
+        if let Some(metrics) = value.get("metrics") {
+            tally.prompt_tokens += metrics
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            tally.completion_tokens += metrics
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            tally.cached_tokens += metrics
+                .get("cached_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+        }
+    }
+    tally
 }
 
 pub fn trajectory(normalized: &Path, summary: &Summary) -> Result<Trajectory> {

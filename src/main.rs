@@ -2,11 +2,15 @@ mod account;
 mod atif;
 mod clock;
 mod config;
+mod detached;
 mod fail;
 mod harness;
 mod home;
+#[cfg(windows)]
+mod job;
 mod ledger;
 mod output;
+mod report;
 mod run;
 mod session;
 mod skill;
@@ -14,17 +18,21 @@ mod skill;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use config::Config;
-use fail::{Fail, EXIT_INTERNAL, EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
+use detached::{LaunchFile, State};
+use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::LaunchRequest;
 use ledger::Summary;
-use output::{one_line, Toon};
-use run::Ledger;
+use output::{one_line, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-const MESSAGE_LIMIT: usize = 200;
+const STOP_BUDGET: Duration = Duration::from_secs(10);
+const KILL_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -50,6 +58,9 @@ struct Cli {
 
     #[arg(long, value_name = "NAME")]
     account: Option<String>,
+
+    #[arg(long)]
+    detach: bool,
 
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
@@ -98,6 +109,31 @@ enum Command {
         #[command(subcommand)]
         action: AccountAction,
     },
+    Ps,
+    Status {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    Wait {
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    Tail {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    Stop {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    #[command(name = "__supervise", hide = true)]
+    Supervise {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -131,7 +167,7 @@ struct AccountRemove {
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code as u8),
-        Err(error) => ExitCode::from(report(&error) as u8),
+        Err(error) => ExitCode::from(report_error(&error) as u8),
     }
 }
 
@@ -194,6 +230,12 @@ fn dispatch() -> Result<i32> {
         Some(Command::Show { id }) => show(&id),
         Some(Command::Export { atif, id }) => export(atif, &id),
         Some(Command::Account { action }) => accounts(action, &home, &config),
+        Some(Command::Ps) => ps(),
+        Some(Command::Status { id }) => status(&id),
+        Some(Command::Wait { timeout, id }) => wait(&id, timeout),
+        Some(Command::Tail { id }) => tail(&id),
+        Some(Command::Stop { id }) => stop(&id),
+        Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
     }
 }
@@ -231,21 +273,90 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         cwd,
     };
 
-    let outcome = run::headless(&adapter, &request, profile.as_deref(), home)?;
+    if cli.detach {
+        return detach(&adapter, &request, account.as_deref(), home);
+    }
 
+    let launch = run::prepare(&adapter, &request, home)?;
+    let report = run::headless(
+        &adapter,
+        &request,
+        run::Account {
+            name: account.as_deref(),
+            dir: profile.as_deref(),
+        },
+        launch,
+    )?;
     print!(
         "{}",
-        render(adapter.id(), &request, &outcome, account.as_deref())
+        report::render(&report, &Session::open(home, &report.id))
     );
+    Ok(report::exit_code(&report))
+}
 
-    let ledger_failed = matches!(outcome.ledger, Ledger::Failed(_))
-        || outcome.tally.error.is_some()
-        || outcome.summary_error.is_some();
-    Ok(match (outcome.succeeded(), ledger_failed) {
-        (false, _) => EXIT_SESSION_FAILED,
-        (true, true) => EXIT_LEDGER_FAILED,
-        (true, false) => EXIT_OK,
-    })
+fn detach(
+    harness: &Arc<dyn harness::Harness>,
+    request: &LaunchRequest,
+    account: Option<&str>,
+    home: &Path,
+) -> Result<i32> {
+    let launch = run::prepare(harness, request, home)?;
+    let session = launch.session;
+    detached::record_launch(
+        &session,
+        &LaunchFile {
+            harness: harness.id().to_string(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            prompt: request.prompt.clone(),
+            cwd: request.cwd.clone(),
+            account: account.map(str::to_string),
+            started_millis: clock::now_millis() as u64,
+        },
+    )?;
+    let mut supervisor = match detached::spawn_supervisor(&session) {
+        Ok(child) => child,
+        Err(error) => {
+            detached::abandon_detach(&session, None);
+            return Err(error);
+        }
+    };
+    let pid = supervisor.id();
+    if let Err(error) = detached::record_supervisor(&session, pid) {
+        detached::abandon_detach(&session, Some(supervisor));
+        return Err(error);
+    }
+    let _ = supervisor.try_wait();
+    print!("{}", render_detached(&session, harness, request, pid));
+    Ok(EXIT_OK)
+}
+
+fn render_detached(
+    session: &Session,
+    harness: &Arc<dyn harness::Harness>,
+    request: &LaunchRequest,
+    pid: u32,
+) -> String {
+    let mut toon = Toon::new();
+    toon.section("session")
+        .field("id", &session.id)
+        .field("status", "running")
+        .field("harness", harness.id())
+        .field("model", &request.model)
+        .field(
+            "effort",
+            request.effort.as_deref().unwrap_or("harness-default"),
+        )
+        .number("pid", pid);
+    toon.list(
+        "help",
+        &[
+            format!("Run `boxr wait {}` to block until it finishes", session.id),
+            format!("Run `boxr status {}` to check on it", session.id),
+            format!("Run `boxr stop {}` to end it", session.id),
+        ],
+    );
+    toon.render()
 }
 
 fn accounts(action: AccountAction, home: &Path, config: &Config) -> Result<i32> {
@@ -390,90 +501,234 @@ fn profile_for(
     account::resolve(home, harness_id, name)
 }
 
-fn render(
-    harness_id: &str,
-    request: &LaunchRequest,
-    outcome: &run::Outcome,
-    account: Option<&str>,
-) -> String {
-    let session = &outcome.session;
+fn supervise(id: &str) -> Result<i32> {
+    let home = home::boxr_home()?;
+    let session = Session::open(&home, id);
+    let launch = detached::read_launch(&session)?.ok_or_else(|| {
+        Fail::usage(
+            format!("session {id} has no launch record to supervise"),
+            vec!["Run `boxr ps` to list the sessions boxr is running".to_string()],
+        )
+    })?;
+    let adapter = harness::lookup(&launch.harness).ok_or_else(|| {
+        Fail::usage(
+            format!("unknown harness `{}`", launch.harness),
+            vec![format!(
+                "Known harnesses: {}",
+                harness::known_ids().join(", ")
+            )],
+        )
+    })?;
+    let account = launch.account.clone();
+    let profile = match &account {
+        Some(name) => Some(profile_for(adapter.as_ref(), &home, &launch.harness, name)?),
+        None => None,
+    };
+    let request = LaunchRequest {
+        model: launch.model,
+        effort: launch.effort,
+        prompt: launch.prompt,
+        cwd: launch.cwd,
+    };
+    let launch = run::adopt(&adapter, &request, session)?;
+    let report = run::headless(
+        &adapter,
+        &request,
+        run::Account {
+            name: account.as_deref(),
+            dir: profile.as_deref(),
+        },
+        launch,
+    )?;
+    Ok(report::exit_code(&report))
+}
+
+fn ps() -> Result<i32> {
+    let home = home::boxr_home()?;
+    let mut ids = Vec::new();
+    let mut rows = Vec::new();
+    for id in Session::ids(&home)? {
+        let Ok(state) = detached::state(&home, &id) else {
+            continue;
+        };
+        if let State::Running(running) = state {
+            let pid = running
+                .pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            rows.push(format!(
+                "{id} {} {} {pid} {} {}",
+                running.launch.harness,
+                running.launch.model,
+                clock::iso8601(running.launch.started_millis as u128),
+                running.steps
+            ));
+            ids.push(id);
+        }
+    }
+    let mut toon = Toon::new();
+    toon.section("ps").number("running", rows.len());
+    toon.list("sessions", &rows);
+    let help = match ids.first() {
+        Some(id) => vec![
+            format!("Run `boxr status {id}` to check on a session without waiting"),
+            format!("Run `boxr wait {id}` to block until it finishes"),
+        ],
+        None => vec![
+            "Run `boxr --detach --harness <h> --model <m> \"<prompt>\"` to start a background session"
+                .to_string(),
+        ],
+    };
+    toon.list("help", &help);
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn status(id: &str) -> Result<i32> {
+    let home = home::boxr_home()?;
+    let session = Session::open(&home, id);
+    match detached::state(&home, id)? {
+        State::Running(running) => print!("{}", render_running(&session, &running)),
+        State::Finished(report) => print!("{}", report::render(&report, &session)),
+    }
+    Ok(EXIT_OK)
+}
+
+fn render_running(session: &Session, running: &detached::Running) -> String {
     let mut toon = Toon::new();
     toon.section("session")
         .field("id", &session.id)
-        .field("status", &outcome.summary.status)
-        .field("harness", harness_id)
-        .field("model", &request.model)
+        .field("status", "running")
+        .field("harness", &running.launch.harness)
+        .field("model", &running.launch.model)
         .field(
             "effort",
-            request.effort.as_deref().unwrap_or("harness-default"),
+            running
+                .launch
+                .effort
+                .as_deref()
+                .unwrap_or("harness-default"),
         )
-        .field("account", account.unwrap_or("harness-default"))
         .field(
-            "harnessSessionId",
-            outcome.harness_session_id.as_deref().unwrap_or("unknown"),
+            "started",
+            &clock::iso8601(running.launch.started_millis as u128),
         )
-        .number("durationMs", outcome.duration_ms)
-        .number("exitCode", outcome.exit_code)
-        .field(
-            "message",
-            &one_line(
-                outcome.final_message.as_deref().unwrap_or(""),
-                MESSAGE_LIMIT,
-            ),
-        );
-    let ledger = toon
-        .section("ledger")
-        .field(
-            "normalized",
-            &session.normalized_path().display().to_string(),
-        )
-        .number("steps", outcome.tally.steps)
-        .number("promptTokens", outcome.tally.prompt_tokens)
-        .number("completionTokens", outcome.tally.completion_tokens)
-        .number("cachedTokens", outcome.tally.cached_tokens)
-        .field("summary", &outcome.summary_path.display().to_string());
-    if let Some(error) = &outcome.tally.error {
-        ledger.field("captureError", &one_line(error, MESSAGE_LIMIT));
+        .number("steps", running.steps);
+    if let Some(pid) = running.pid {
+        toon.number("pid", pid);
     }
-    if let Some(error) = &outcome.summary_error {
-        ledger.field("summaryError", &one_line(error, MESSAGE_LIMIT));
-    }
-    let raw = toon
-        .section("raw")
-        .field("dir", &session.raw_dir().display().to_string())
-        .field("stream", &session.stream_path().display().to_string());
-    let record_line = match &outcome.ledger {
-        Ledger::Recorded(transcript) => {
-            raw.field("ledger", "recorded")
-                .field("transcript", &transcript.display().to_string());
-            format!("Read the raw transcript at {}", transcript.display())
-        }
-        Ledger::Failed(reason) => {
-            raw.field("ledger", "failed")
-                .field("ledgerError", &one_line(reason, MESSAGE_LIMIT));
-            format!("Read the raw stream at {}", session.stream_path().display())
-        }
-    };
+    toon.list(
+        "help",
+        &[
+            format!("Run `boxr wait {}` to block until it finishes", session.id),
+            format!("Run `boxr tail {}` to stream its steps", session.id),
+            format!("Run `boxr stop {}` to end it", session.id),
+        ],
+    );
+    toon.render()
+}
 
-    let help = if outcome.succeeded() {
-        let mut lines = vec![record_line];
-        if outcome.summary_error.is_none() {
-            lines.push(format!(
-                "Run `boxr show {}` to read the session summary",
-                session.id
-            ));
+fn wait(id: &str, timeout: Option<u64>) -> Result<i32> {
+    let home = home::boxr_home()?;
+    let session = Session::open(&home, id);
+    let deadline = timeout.map(|seconds| Instant::now() + Duration::from_secs(seconds));
+    loop {
+        if let Some(report) = detached::settled(&home, id)? {
+            print!("{}", report::render(&report, &session));
+            return Ok(report::exit_code(&report));
         }
-        lines
-    } else {
-        vec![
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(Fail::wait_timeout(
+                format!("session {id} is still running and the wait timed out"),
+                vec![format!("Run `boxr status {id}` to check on it")],
+            )
+            .into());
+        }
+        std::thread::sleep(detached::POLL);
+    }
+}
+
+fn tail(id: &str) -> Result<i32> {
+    let home = home::boxr_home()?;
+    let session = Session::open(&home, id);
+    detached::state(&home, id)?;
+    let path = session.normalized_path();
+    let mut stdout = std::io::stdout();
+    let mut source = None;
+    let mut pending = Vec::new();
+    let mut finished = false;
+    let mut ticks = 0u32;
+    loop {
+        if source.is_none() {
+            source = std::fs::File::open(&path).ok();
+        }
+        let mut read_bytes = 0;
+        if let Some(file) = source.as_mut() {
+            read_bytes = file
+                .read_to_end(&mut pending)
+                .with_context(|| format!("reading {}", path.display()))?;
+            if let Some(last) = pending.iter().rposition(|byte| *byte == b'\n') {
+                stdout.write_all(&pending[..=last])?;
+                stdout.flush()?;
+                pending.drain(..=last);
+            }
+        }
+        if finished && read_bytes == 0 {
+            if !pending.is_empty() {
+                stdout.write_all(&pending)?;
+                stdout.flush()?;
+            }
+            return Ok(EXIT_OK);
+        }
+        ticks += 1;
+        if !finished && ticks % 2 == 0 {
+            finished = !detached::running(&session)?;
+        }
+        std::thread::sleep(detached::POLL);
+    }
+}
+
+fn stop(id: &str) -> Result<i32> {
+    let home = home::boxr_home()?;
+    let session = Session::open(&home, id);
+    let mut action = "already-finished";
+    if let State::Running(running) = detached::state(&home, id)? {
+        action = "stopped";
+        detached::request_stop(&session)?;
+        if detached::finish(&home, id, STOP_BUDGET).is_err() {
+            let pid = running.pid.ok_or_else(|| {
+                anyhow::anyhow!("session {id} is still starting and has no supervisor to stop")
+            })?;
+            detached::hard_kill(pid);
+            detached::finish(&home, id, KILL_BUDGET)?;
+        }
+    }
+    let summary = ledger::read_summary(&home, id).map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec![format!("Run `boxr status {id}` to check on the session")],
+        )
+    })?;
+    print!("{}", render_stopped(&session, &summary, action));
+    Ok(EXIT_OK)
+}
+
+fn render_stopped(session: &Session, summary: &Summary, action: &str) -> String {
+    let mut toon = Toon::new();
+    toon.section("stop")
+        .field("id", &session.id)
+        .field("action", action);
+    summarize(&mut toon, summary);
+    toon.list(
+        "help",
+        &[
+            format!("Run `boxr show {}` to read the session summary", session.id),
             format!(
-                "Read {} for the harness error output",
-                session.stderr_path().display()
+                "Run `boxr export --atif {}` to write a standard ATIF trajectory",
+                session.id
             ),
-            record_line,
-        ]
-    };
-    toon.list("help", &help);
+        ],
+    );
     toon.render()
 }
 
@@ -587,7 +842,7 @@ fn resolve(
     })
 }
 
-fn report(error: &anyhow::Error) -> i32 {
+fn report_error(error: &anyhow::Error) -> i32 {
     let (code, message, help) = match error.downcast_ref::<Fail>() {
         Some(fail) => (fail.code, fail.message.clone(), fail.help.clone()),
         None => (

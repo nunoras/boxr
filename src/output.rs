@@ -1,5 +1,7 @@
 use std::fmt::{Display, Write as _};
 
+pub const MESSAGE_LIMIT: usize = 200;
+
 pub struct Toon {
     body: String,
 }
