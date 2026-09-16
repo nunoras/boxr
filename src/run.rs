@@ -1,6 +1,6 @@
 use crate::clock::{iso8601, now_millis};
 use crate::fail::Fail;
-use crate::harness::{Harness, LaunchRequest, StreamEvent};
+use crate::harness::{Harness, HarnessSession, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
 use crate::ledger::{self, Follower, Seed, SessionStart, Summary, Tally};
 use crate::session::Session;
@@ -54,7 +54,12 @@ pub fn headless(
     request: &LaunchRequest,
     home: &Path,
 ) -> Result<Outcome> {
-    let command = harness.command(request)?;
+    let session = Session::plan(home);
+    let harness_session = HarnessSession {
+        session_id: session.id.clone(),
+        dir: session.harness_dir(),
+    };
+    let command = harness.command(request, &harness_session)?;
     let program = locate(&command.program).ok_or_else(|| {
         Fail::harness_unavailable(
             format!(
@@ -95,9 +100,10 @@ pub fn headless(
     let child = Arc::new(Mutex::new(Supervised(spawned)));
     let stop = watch_for_stop(&child);
 
-    let session = Session::create(home)?;
+    session.materialize()?;
     let follower = Follower::start(
         Arc::clone(harness),
+        harness_session.clone(),
         session.normalized_path(),
         Seed {
             session_id: session.id.clone(),
@@ -169,8 +175,12 @@ pub fn headless(
 
     let tally = follower.finish();
 
-    let ledger = match record_transcript(harness.as_ref(), harness_session_id.as_deref(), &session)
-    {
+    let ledger = match record_transcript(
+        harness.as_ref(),
+        &harness_session,
+        harness_session_id.as_deref(),
+        &session,
+    ) {
         Ok(path) => Ledger::Recorded(path),
         Err(error) => Ledger::Failed(format!("{error:#}")),
     };
@@ -373,11 +383,12 @@ fn create_private_file(path: &Path) -> Result<File> {
 
 fn record_transcript(
     harness: &dyn Harness,
+    harness_session: &HarnessSession,
     harness_session_id: Option<&str>,
     session: &Session,
 ) -> Result<PathBuf> {
     let id = harness_session_id.ok_or_else(|| anyhow!("the harness reported no session id"))?;
-    let source = harness.transcript(id)?;
+    let source = harness.transcript(harness_session, id)?;
     let target = session.transcript_path();
     fs::copy(&source, &target)
         .with_context(|| format!("copying {} to {}", source.display(), target.display()))?;

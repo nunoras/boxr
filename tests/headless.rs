@@ -1,3 +1,9 @@
+mod common;
+
+use common::{
+    assert_valid_atif, assert_valid_steps, example_binary, normalized_lines, session_id_of,
+    sources_of, stderr_of, stdout_of, summary_of,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -223,29 +229,6 @@ fn fake_name() -> &'static str {
 
 fn fake_claude() -> PathBuf {
     example_binary("fake-claude")
-}
-
-fn example_binary(name: &str) -> PathBuf {
-    let boxr = Path::new(env!("CARGO_BIN_EXE_boxr"));
-    let path = boxr
-        .parent()
-        .expect("target directory")
-        .join("examples")
-        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        path.is_file(),
-        "the {name} example is missing at {}; build it with `cargo build --example {name}`",
-        path.display()
-    );
-    path
-}
-
-fn stdout_of(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
-fn stderr_of(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).to_string()
 }
 
 fn session_dir(harness: &Harness) -> PathBuf {
@@ -509,91 +492,6 @@ fn a_cmd_shim_on_path_launches_claude() {
     assert!(stdout.contains("ledger: recorded"), "{stdout}");
 }
 
-fn session_id_of(stdout: &str) -> String {
-    stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("id: "))
-        .expect("session id line")
-        .to_string()
-}
-
-fn normalized_lines(path: &Path) -> Vec<Value> {
-    fs::read_to_string(path)
-        .expect("normalized ledger")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("a json line"))
-        .collect()
-}
-
-fn summary_of(harness: &Harness, id: &str) -> Value {
-    fs::read_to_string(harness.boxr_home().join("summary.jsonl"))
-        .expect("summary ledger")
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("a json line"))
-        .find(|value| value["id"] == id)
-        .expect("a summary line for the session")
-}
-
-fn assert_valid_steps(steps: &[Value]) {
-    for (index, step) in steps.iter().enumerate() {
-        let none = Vec::new();
-        assert_eq!(step["step_id"], (index + 1) as i64, "{step}");
-        let source = step["source"].as_str().expect("step source");
-        assert!(
-            matches!(source, "system" | "user" | "agent"),
-            "unknown source {source}"
-        );
-        assert!(step["message"].is_string(), "{step}");
-        if let Some(timestamp) = step["timestamp"].as_str() {
-            assert!(
-                timestamp.ends_with('Z') && timestamp.contains('T'),
-                "{step}"
-            );
-        }
-        if source != "agent" {
-            for field in [
-                "model_name",
-                "reasoning_effort",
-                "reasoning_content",
-                "tool_calls",
-                "observation",
-                "metrics",
-            ] {
-                assert!(step.get(field).is_none(), "{field} on a {source} step");
-            }
-        }
-        let mut call_ids = Vec::new();
-        for call in step["tool_calls"].as_array().unwrap_or(&none) {
-            call_ids.push(call["tool_call_id"].as_str().expect("tool_call_id"));
-            assert!(call["function_name"].is_string(), "{call}");
-            assert!(call["arguments"].is_object(), "{call}");
-        }
-        for result in step["observation"]["results"].as_array().unwrap_or(&none) {
-            assert!(result["content"].is_string(), "{result}");
-            if let Some(source_call_id) = result["source_call_id"].as_str() {
-                assert!(
-                    call_ids.contains(&source_call_id),
-                    "observation {source_call_id} has no tool call on step {step}"
-                );
-            }
-        }
-    }
-}
-
-fn assert_valid_atif(document: &Value) {
-    assert_eq!(document["schema_version"], "ATIF-v1.8");
-    assert!(document["session_id"].is_string(), "{document}");
-    assert!(document["agent"]["name"].is_string(), "{document}");
-    assert!(document["agent"]["version"].is_string(), "{document}");
-    let steps = document["steps"].as_array().expect("steps array");
-    assert!(!steps.is_empty(), "{document}");
-    assert_valid_steps(steps);
-    let metrics = &document["final_metrics"];
-    assert_eq!(metrics["total_steps"], steps.len() as i64, "{document}");
-    assert!(metrics["total_prompt_tokens"].is_u64(), "{document}");
-}
-
 #[test]
 fn steps_land_in_the_normalized_ledger_while_the_harness_is_still_writing() {
     let mut harness = Harness::new();
@@ -684,7 +582,7 @@ fn a_summary_line_records_the_session_with_its_token_counts() {
     let stdout = stdout_of(&output);
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
 
-    let summary = summary_of(&harness, &session_id_of(&stdout));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
     assert_eq!(summary["harness"], "claude");
     assert_eq!(summary["model"], "sonnet");
     assert_eq!(summary["mode"], "headless");
@@ -772,10 +670,7 @@ fn tool_results_fold_into_the_agent_step_that_called_them() {
     let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
     let steps = &lines[1..lines.len() - 1];
     assert_valid_steps(steps);
-    let sources: Vec<&str> = steps
-        .iter()
-        .map(|step| step["source"].as_str().expect("source"))
-        .collect();
+    let sources = sources_of(steps);
     assert_eq!(sources, ["user", "agent", "agent", "agent"]);
     for (step, call_id, content) in [
         (
@@ -814,7 +709,7 @@ fn a_reply_split_across_transcript_lines_counts_its_tokens_once_on_a_step_with_c
     let stdout = stdout_of(&output);
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
 
-    let summary = summary_of(&harness, &session_id_of(&stdout));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
     assert_eq!(summary["steps"], 4);
     assert_eq!(summary["promptTokens"], 25240 + 28999);
     assert_eq!(summary["completionTokens"], 408 + 507);
@@ -865,7 +760,7 @@ fn a_harness_killed_mid_run_still_leaves_a_closed_ledger_and_a_summary() {
         .count();
     assert_eq!(unanswered, 2, "{lines:?}");
 
-    let summary = summary_of(&harness, &session_id_of(&stdout));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
     if cfg!(unix) {
         assert!(stdout.contains("status: interrupted"), "{stdout}");
         assert_eq!(summary["status"], "interrupted");
@@ -927,7 +822,7 @@ fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted()
         "{lines:?}"
     );
 
-    let summary = summary_of(&harness, &session_id_of(&stdout));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
     assert_eq!(summary["status"], "interrupted");
 }
 
@@ -962,7 +857,7 @@ fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted
     );
 
     let id = session.file_name().expect("session id").to_string_lossy();
-    let summary = summary_of(&harness, &id);
+    let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["status"], "interrupted");
 }
 
@@ -975,7 +870,7 @@ fn a_harness_that_exits_non_zero_before_any_result_is_failed_not_interrupted() {
 
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(stdout.contains("status: failed"), "{stdout}");
-    let summary = summary_of(&harness, &session_id_of(&stdout));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
     assert_eq!(summary["status"], "failed");
     assert_eq!(summary["exitCode"], 97);
 }
