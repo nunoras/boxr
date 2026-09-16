@@ -126,7 +126,14 @@ pub fn headless(
     let mut spawned = builder
         .spawn()
         .with_context(|| format!("starting harness {}", program.display()))?;
-    let _job = guard_children(&spawned)?;
+    let _job = match guard_children(&spawned) {
+        Ok(job) => job,
+        Err(error) => {
+            let _ = spawned.kill();
+            let _ = spawned.wait();
+            return Err(error);
+        }
+    };
 
     let stdin_pipe = spawned.stdin.take();
     let stdout = spawned

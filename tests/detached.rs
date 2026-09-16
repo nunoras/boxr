@@ -638,9 +638,13 @@ fn a_corrupt_supervisor_record_is_not_treated_as_absence() {
 #[test]
 fn a_job_guard_failure_fails_the_launch() {
     let harness = Harness::new();
+    let pid_file = harness.root.path().join("guard-fail.pid");
+    let bin_dir = harness.root.path().join("bin");
+    install_orphan_harness(&bin_dir, &pid_file);
+
     let mut command = harness.command(
         &["--harness", "claude", "--model", "opus", "hello"],
-        Some(&harness.root.path().join("bin")),
+        Some(&bin_dir),
     );
     command.env("BOXR_TEST_FAIL_JOB_GUARD", "1");
     let output = command.output().expect("boxr runs");
@@ -654,4 +658,54 @@ fn a_job_guard_failure_fails_the_launch() {
         stderr.contains("process guard") || stderr.contains("job object guard"),
         "{stderr}"
     );
+
+    if let Some(pid) = wait_for_optional_pid(&pid_file, Duration::from_secs(2)) {
+        await_process_gone(pid);
+    } else {
+        sleep(Duration::from_millis(500));
+        if let Some(pid) = wait_for_optional_pid(&pid_file, Duration::from_millis(200)) {
+            assert!(
+                !process_alive(pid),
+                "guard failure left harness {pid} running"
+            );
+        }
+    }
+}
+
+fn install_orphan_harness(bin_dir: &std::path::Path, pid_file: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\necho $$ > {}\nexec sleep 60\n",
+            pid_file.display()
+        );
+        let path = bin_dir.join("claude");
+        fs::write(&path, script).expect("orphan harness");
+        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("chmod");
+    }
+    #[cfg(windows)]
+    {
+        let script = format!(
+            "@echo %RANDOM%%RANDOM% > {pid}\r\n@powershell -NoProfile -Command \"Set-Content -Path '{pid}' -Value $PID; Start-Sleep -Seconds 60\"\r\n",
+            pid = pid_file.display()
+        );
+        fs::remove_file(bin_dir.join("claude.exe")).ok();
+        fs::write(bin_dir.join("claude.cmd"), script).expect("orphan harness");
+    }
+}
+
+fn wait_for_optional_pid(path: &std::path::Path, budget: Duration) -> Option<u32> {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        if let Ok(text) = fs::read_to_string(path) {
+            if let Ok(pid) = text.trim().parse::<u32>() {
+                return Some(pid);
+            }
+        }
+        sleep(Duration::from_millis(20));
+    }
+    None
 }
