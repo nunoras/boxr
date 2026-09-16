@@ -9,12 +9,16 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn create(home: &Path) -> Result<Session> {
+    pub fn plan(home: &Path) -> Session {
         let id = new_id();
         let dir = home.join("sessions").join(&id);
-        create_private_dir(&dir)?;
-        create_private_dir(&dir.join("raw"))?;
-        Ok(Session { id, dir })
+        Session { id, dir }
+    }
+
+    pub fn materialize(&self) -> Result<()> {
+        create_private_dir(&self.dir)?;
+        create_private_dir(&self.raw_dir())?;
+        create_private_dir(&self.harness_dir())
     }
 
     pub fn open(home: &Path, id: &str) -> Session {
@@ -46,6 +50,10 @@ impl Session {
 
     pub fn transcript_path(&self) -> PathBuf {
         self.raw_dir().join("transcript.jsonl")
+    }
+
+    pub fn harness_dir(&self) -> PathBuf {
+        self.dir.join("harness")
     }
 }
 

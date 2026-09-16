@@ -54,6 +54,11 @@ Other harnesses are added later as separate adapters.
 pi isolates through `PI_CODING_AGENT_DIR`, and `--session-id` with `--session-dir` let boxr choose the transcript file up front.
 pi is multi-provider, and `--model provider/id` picks the provider.
 
+Confirmed on 2026-09-16 against pi 0.85.1, its shipped CLI and a recorded session: `--session-dir` is the session storage directory itself, not a parent, and pi names the file `<ISO timestamp with colons and dots replaced by dashes>_<session-id>.jsonl` there.
+So only the timestamp prefix is unknown before launch: boxr uses its own session id as pi's session id, owns the session directory, and finds exactly one file by its `_<session-id>.jsonl` suffix.
+A session file is JSONL of `session`, `model_change`, `thinking_level_change`, `message` and `label` entries, where a `message` entry carries one `user`, `assistant` or `toolResult` message, and only the assistant message reports usage, the model and the provider.
+Print mode reports no pi version, so the normalized header records the agent version as `unknown`.
+
 ## Accounts: profiles and subscriptions
 
 These are two separate concepts.
