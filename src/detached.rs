@@ -1,0 +1,354 @@
+use crate::clock::{iso8601, now_millis};
+use crate::fail::Fail;
+use crate::home::restrict_file;
+use crate::ledger::{self, Summary};
+use crate::report::{self, Ledger, Report};
+use crate::session::Session;
+use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+pub const SUPERVISOR_COMMAND: &str = "__supervise";
+pub const POLL: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchFile {
+    pub harness: String,
+    pub model: String,
+    pub effort: Option<String>,
+    pub prompt: String,
+    pub cwd: std::path::PathBuf,
+    #[serde(default)]
+    pub account: Option<String>,
+    pub started_millis: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SupervisorFile {
+    pub pid: u32,
+}
+
+pub struct Running {
+    pub pid: Option<u32>,
+    pub launch: LaunchFile,
+    pub steps: u64,
+}
+
+pub enum State {
+    Running(Running),
+    Finished(Box<Report>),
+}
+
+pub fn record_launch(session: &Session, launch: &LaunchFile) -> Result<()> {
+    write_record(&session.launch_path(), launch)
+}
+
+pub fn read_launch(session: &Session) -> Result<Option<LaunchFile>> {
+    read_record(&session.launch_path())
+}
+
+pub fn record_supervisor(session: &Session, pid: u32) -> Result<()> {
+    if std::env::var_os("BOXR_TEST_FAIL_SUPERVISOR_RECORD").is_some() {
+        return Err(anyhow!("refusing to record the supervisor"));
+    }
+    write_record(&session.supervisor_path(), &SupervisorFile { pid })
+}
+
+pub fn spawn_supervisor(session: &Session) -> Result<Child> {
+    let program =
+        std::env::current_exe().context("locating the boxr executable to supervise with")?;
+    let log = session.dir.join("supervisor.log");
+    let stderr = fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
+    restrict_file(&log)?;
+    let mut command = Command::new(program);
+    command
+        .arg(SUPERVISOR_COMMAND)
+        .arg(&session.id)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr));
+    detach(&mut command);
+    command
+        .spawn()
+        .context("starting the boxr supervisor process")
+}
+
+pub fn request_stop(session: &Session) -> Result<()> {
+    let path = session.stop_path();
+    fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn abandon_detach(session: &Session, supervisor: Option<Child>) {
+    if let Some(mut child) = supervisor {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let launch = read_launch(session).ok().flatten();
+    let report = interrupted(session, launch.as_ref());
+    let _ = report::write(&session.report_path(), &report);
+    append_summary(session, &report);
+}
+
+pub fn state(home: &Path, id: &str) -> Result<State> {
+    let session = Session::open(home, id);
+    let launch = read_record::<LaunchFile>(&session.launch_path())?;
+    let supervisor = read_record::<SupervisorFile>(&session.supervisor_path())?;
+    if let Some(supervisor) = &supervisor {
+        if alive(supervisor.pid) {
+            let launch = launch.ok_or_else(|| anyhow!("session {id} has no launch record"))?;
+            let steps = ledger::totals(&session.normalized_path()).steps;
+            return Ok(State::Running(Running {
+                pid: Some(supervisor.pid),
+                launch,
+                steps,
+            }));
+        }
+    }
+    if let Some(summary) = ledger::find_summary(home, id)? {
+        return Ok(State::Finished(Box::new(finished(&session, &summary)?)));
+    }
+    if let Some(report) = read_record::<Report>(&session.report_path())? {
+        append_summary(&session, &report);
+        return Ok(State::Finished(Box::new(report)));
+    }
+    if supervisor.is_some() {
+        let report = interrupted(&session, launch.as_ref());
+        append_summary(&session, &report);
+        return Ok(State::Finished(Box::new(report)));
+    }
+    if let Some(launch) = launch {
+        let steps = ledger::totals(&session.normalized_path()).steps;
+        return Ok(State::Running(Running {
+            pid: None,
+            launch,
+            steps,
+        }));
+    }
+    Err(no_session(id))
+}
+
+fn no_session(id: &str) -> anyhow::Error {
+    Fail::usage(
+        format!("no session {id} in the ledger"),
+        vec!["Run a boxr launch, then `boxr ps` to list the sessions it recorded".to_string()],
+    )
+    .into()
+}
+
+pub fn running(session: &Session) -> Result<bool> {
+    match read_record::<SupervisorFile>(&session.supervisor_path())? {
+        Some(supervisor) => Ok(alive(supervisor.pid)),
+        None => Ok(session.launch_path().is_file() && !session.report_path().is_file()),
+    }
+}
+
+pub fn settled(home: &Path, id: &str) -> Result<Option<Report>> {
+    let session = Session::open(home, id);
+    if running(&session)? {
+        return Ok(None);
+    }
+    match state(home, id)? {
+        State::Finished(report) => Ok(Some(*report)),
+        State::Running(_) => Ok(None),
+    }
+}
+
+pub fn finish(home: &Path, id: &str, budget: Duration) -> Result<Report> {
+    let deadline = Instant::now() + budget;
+    loop {
+        if let Some(report) = settled(home, id)? {
+            return Ok(report);
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!("session {id} is still running"));
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+pub fn hard_kill(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    terminate_windows(pid);
+}
+
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0;
+        let read = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        read != 0 && code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(windows)]
+fn terminate_windows(pid: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if !handle.is_null() {
+            TerminateProcess(handle, 1);
+            CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn detach(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(windows)]
+fn detach(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+fn finished(session: &Session, summary: &Summary) -> Result<Report> {
+    if let Some(report) = read_record::<Report>(&session.report_path())? {
+        return Ok(report);
+    }
+    let transcript = session.transcript_path();
+    let ledger = if transcript.is_file() {
+        Ledger::Recorded(transcript)
+    } else {
+        Ledger::Interrupted
+    };
+    Ok(Report {
+        id: summary.id.clone(),
+        status: summary.status.clone(),
+        harness: summary.harness.clone(),
+        model: summary.model.clone(),
+        effort: summary.effort.clone(),
+        account: summary.profile.clone(),
+        harness_session_id: summary.harness_session_id.clone(),
+        start: summary.start.clone(),
+        end: summary.end.clone(),
+        duration_ms: summary.duration_ms,
+        exit_code: summary.exit_code,
+        final_message: None,
+        steps: summary.steps,
+        prompt_tokens: summary.prompt_tokens,
+        completion_tokens: summary.completion_tokens,
+        cached_tokens: summary.cached_tokens,
+        capture_error: None,
+        summary_error: None,
+        ledger,
+    })
+}
+
+fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
+    let totals = ledger::totals(&session.normalized_path());
+    let end = now_millis();
+    let started = launch
+        .map(|launch| launch.started_millis as u128)
+        .unwrap_or(end);
+    Report {
+        id: session.id.clone(),
+        status: "interrupted".to_string(),
+        harness: launch
+            .map(|launch| launch.harness.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        model: launch
+            .map(|launch| launch.model.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        effort: launch.and_then(|launch| launch.effort.clone()),
+        account: launch.and_then(|launch| launch.account.clone()),
+        harness_session_id: None,
+        start: iso8601(started),
+        end: iso8601(end),
+        duration_ms: end.saturating_sub(started) as u64,
+        exit_code: interrupted_exit_code(),
+        final_message: None,
+        steps: totals.steps,
+        prompt_tokens: totals.prompt_tokens,
+        completion_tokens: totals.completion_tokens,
+        cached_tokens: totals.cached_tokens,
+        capture_error: totals.error,
+        summary_error: None,
+        ledger: Ledger::Interrupted,
+    }
+}
+
+#[cfg(unix)]
+fn interrupted_exit_code() -> i32 {
+    128 + 9
+}
+
+#[cfg(not(unix))]
+fn interrupted_exit_code() -> i32 {
+    1
+}
+
+fn append_summary(session: &Session, report: &Report) {
+    let summary = Summary {
+        id: report.id.clone(),
+        harness: report.harness.clone(),
+        harness_session_id: report.harness_session_id.clone(),
+        model: report.model.clone(),
+        effort: report.effort.clone(),
+        profile: report.account.clone(),
+        mode: "headless".to_string(),
+        start: report.start.clone(),
+        end: report.end.clone(),
+        duration_ms: report.duration_ms,
+        status: report.status.clone(),
+        exit_code: report.exit_code,
+        steps: report.steps,
+        prompt_tokens: report.prompt_tokens,
+        completion_tokens: report.completion_tokens,
+        cached_tokens: report.cached_tokens,
+    };
+    let _ = ledger::append_summary(&session.summary_path(), &summary);
+}
+
+fn write_record(path: &Path, value: &impl Serialize) -> Result<()> {
+    let text = serde_json::to_string(value).context("encoding a session record")?;
+    fs::write(path, format!("{text}\n")).with_context(|| format!("writing {}", path.display()))?;
+    restrict_file(path)
+}
+
+fn read_record<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
+        }
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .with_context(|| format!("parsing {}", path.display()))
+}
