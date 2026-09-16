@@ -209,6 +209,19 @@ Each harness resolves its config directory from its own override environment var
 
 Confirmed on 2026-09-15 from each tool's own docs or shipped files: Claude Code documents personal skills at `~/.claude/skills/<name>/SKILL.md`, Codex's shipped `skill-installer` skill names `$CODEX_HOME/skills` with default `~/.codex/skills`, and pi documents global skills at `~/.pi/agent/skills/`.
 
+## Verification
+
+Two layers prove boxr works.
+
+The automated suite drives the `boxr` binary as a black box against a throwaway boxr home, with fake harness executables standing in for Claude Code, Codex and pi.
+It proves boxr's own behaviour and says nothing about harness format drift.
+
+The spec's opt-in smoke suite is the project-local `verify-boxr` skill under `.claude/skills/verify-boxr/`.
+It is run by hand and never in CI.
+It builds the binary, drives a real harness in a throwaway boxr home so the real ledger and profiles are never touched, saves the TOON result and the raw ledger layers to an evidence directory that outlives the run, and then removes only what the run created.
+Its `features/` map holds one file per user-facing feature, and each ticket that adds user-facing surface adds its own file there.
+A run spends real subscription quota, so the skill always uses the cheapest model and a one-line prompt.
+
 ## Milestones
 
 1. Launch and ledger: headless and interactive, isolated profiles, subscriptions, live tailing into raw, ATIF JSONL and summary layers, redaction.
