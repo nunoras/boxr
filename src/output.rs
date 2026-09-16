@@ -41,6 +41,16 @@ impl Toon {
     }
 
     pub fn table(&mut self, name: &str, columns: &[&str], rows: &[Vec<String>]) -> &mut Toon {
+        self.table_with_numbers(name, columns, rows, columns.len())
+    }
+
+    pub fn table_with_numbers(
+        &mut self,
+        name: &str,
+        columns: &[&str],
+        rows: &[Vec<String>],
+        first_number: usize,
+    ) -> &mut Toon {
         let _ = writeln!(
             self.body,
             "{name}[{}]{{{}}}:",
@@ -48,7 +58,17 @@ impl Toon {
             columns.join(",")
         );
         for row in rows {
-            let cells: Vec<String> = row.iter().map(|cell| scalar(cell)).collect();
+            let cells: Vec<String> = row
+                .iter()
+                .enumerate()
+                .map(|(index, cell)| {
+                    if index < first_number {
+                        scalar(cell)
+                    } else {
+                        cell.to_string()
+                    }
+                })
+                .collect();
             let _ = writeln!(self.body, "  {}", cells.join(","));
         }
         self
