@@ -314,17 +314,19 @@ fn detach(
             started_millis: clock::now_millis() as u64,
         },
     )?;
-    let pid = match detached::spawn_supervisor(&session) {
-        Ok(pid) => pid,
+    let mut supervisor = match detached::spawn_supervisor(&session) {
+        Ok(child) => child,
         Err(error) => {
-            detached::abandon_detach(home, &session, None);
+            detached::abandon_detach(&session, None);
             return Err(error);
         }
     };
+    let pid = supervisor.id();
     if let Err(error) = detached::record_supervisor(&session, pid) {
-        detached::abandon_detach(home, &session, Some(pid));
+        detached::abandon_detach(&session, Some(supervisor));
         return Err(error);
     }
+    let _ = supervisor.try_wait();
     print!("{}", render_detached(&session, harness, request, pid));
     Ok(EXIT_OK)
 }

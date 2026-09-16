@@ -4,10 +4,8 @@ use common::*;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
-use std::thread::{self, sleep};
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 fn supervisor_pid(harness: &Harness, id: &str) -> u32 {
@@ -709,45 +707,32 @@ fn await_pid_file(path: &std::path::Path) -> u32 {
 
 #[test]
 fn a_failed_detach_does_not_leave_a_stuck_or_running_session() {
-    let harness = Harness::new();
-    let sessions = harness.boxr_home().join("sessions");
-    fs::create_dir_all(&sessions).expect("sessions dir");
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_flag = Arc::clone(&stop);
-    let sessions_watch = sessions.clone();
-    let poisoner = thread::spawn(move || {
-        while !stop_flag.load(Ordering::SeqCst) {
-            if let Ok(entries) = fs::read_dir(&sessions_watch) {
-                for entry in entries.flatten() {
-                    let dir = entry.path();
-                    if !dir.is_dir() {
-                        continue;
-                    }
-                    let log = dir.join("supervisor.log");
-                    if !log.exists() {
-                        let _ = fs::create_dir(&log);
-                    }
-                }
-            }
-        }
-    });
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_after(9);
 
-    let output = harness.run(&[
-        "--detach",
-        "--harness",
-        "claude",
-        "--model",
-        "opus",
-        "hello",
-    ]);
-    stop.store(true, Ordering::SeqCst);
-    poisoner.join().expect("poisoner thread");
-
+    let mut command = harness.command(
+        &[
+            "--detach",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hello",
+        ],
+        Some(&harness.root.path().join("bin")),
+    );
+    command.env("BOXR_TEST_FAIL_SUPERVISOR_RECORD", "1");
+    let output = command.output().expect("boxr runs");
     let stderr = stderr_of(&output);
     assert_ne!(
         output.status.code(),
         Some(0),
-        "detach should fail when the supervisor cannot start: {stderr}"
+        "detach should fail when the supervisor cannot be recorded: {stderr}"
+    );
+    assert!(
+        stderr.contains("refusing to record the supervisor") || stderr.contains("supervisor"),
+        "{stderr}"
     );
 
     let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
@@ -756,11 +741,14 @@ fn a_failed_detach_does_not_leave_a_stuck_or_running_session() {
         "failed detach left a session listed by ps: {rows:?}"
     );
 
+    let sessions = harness.boxr_home().join("sessions");
     let mut entries: Vec<_> = fs::read_dir(&sessions)
         .map(|dirs| dirs.flatten().map(|entry| entry.path()).collect())
         .unwrap_or_default();
     entries.sort();
-    let dir = entries.last().expect("a session directory from the failed detach");
+    let dir = entries
+        .last()
+        .expect("a session directory from the failed detach");
     let id = dir.file_name().unwrap().to_string_lossy().to_string();
     let status = stdout_of(&harness.run(&["status", &id]));
     assert!(
@@ -770,5 +758,31 @@ fn a_failed_detach_does_not_leave_a_stuck_or_running_session() {
     assert!(
         !status.contains("status: running"),
         "failed detach left session {id} running:\n{status}"
+    );
+
+    if let Ok(text) = fs::read_to_string(harness.pid_file()) {
+        if let Ok(pid) = text.trim().parse::<u32>() {
+            await_process_gone(pid);
+        }
+    }
+
+    #[cfg(unix)]
+    assert_no_zombie_supervisors();
+}
+
+#[cfg(unix)]
+fn assert_no_zombie_supervisors() {
+    let output = Command::new("ps")
+        .args(["-eo", "pid=,stat=,args="])
+        .output()
+        .expect("ps runs");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let zombies: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("__supervise") && line.split_whitespace().any(|part| part.starts_with('Z')))
+        .collect();
+    assert!(
+        zombies.is_empty(),
+        "failed detach left zombie supervisors: {zombies:?}"
     );
 }

@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const SUPERVISOR_COMMAND: &str = "__supervise";
@@ -52,10 +52,13 @@ pub fn read_launch(session: &Session) -> Result<Option<LaunchFile>> {
 }
 
 pub fn record_supervisor(session: &Session, pid: u32) -> Result<()> {
+    if std::env::var_os("BOXR_TEST_FAIL_SUPERVISOR_RECORD").is_some() {
+        return Err(anyhow!("refusing to record the supervisor"));
+    }
     write_record(&session.supervisor_path(), &SupervisorFile { pid })
 }
 
-pub fn spawn_supervisor(session: &Session) -> Result<u32> {
+pub fn spawn_supervisor(session: &Session) -> Result<Child> {
     let program =
         std::env::current_exe().context("locating the boxr executable to supervise with")?;
     let log = session.dir.join("supervisor.log");
@@ -69,10 +72,9 @@ pub fn spawn_supervisor(session: &Session) -> Result<u32> {
         .stdout(Stdio::null())
         .stderr(Stdio::from(stderr));
     detach(&mut command);
-    let child = command
+    command
         .spawn()
-        .context("starting the boxr supervisor process")?;
-    Ok(child.id())
+        .context("starting the boxr supervisor process")
 }
 
 pub fn request_stop(session: &Session) -> Result<()> {
@@ -80,23 +82,10 @@ pub fn request_stop(session: &Session) -> Result<()> {
     fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
 }
 
-pub fn abandon_detach(home: &Path, session: &Session, supervisor_pid: Option<u32>) {
-    if let Some(pid) = supervisor_pid {
-        hard_kill(pid);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while alive(pid) && Instant::now() < deadline {
-            std::thread::sleep(POLL);
-        }
-        let path = session.supervisor_path();
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir_all(&path);
-        let _ = record_supervisor(session, pid);
-        let _ = state(home, &session.id);
-        return;
-    }
-    if session.supervisor_path().is_file() {
-        let _ = state(home, &session.id);
-        return;
+pub fn abandon_detach(session: &Session, supervisor: Option<Child>) {
+    if let Some(mut child) = supervisor {
+        let _ = child.kill();
+        let _ = child.wait();
     }
     let launch = read_launch(session).ok().flatten();
     let report = interrupted(session, launch.as_ref());
