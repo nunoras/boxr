@@ -38,6 +38,8 @@ pub struct Seed {
     pub mode: String,
     pub profile: Option<String>,
     pub resumed_from: Option<String>,
+    pub kind: Option<String>,
+    pub kind_source: Option<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -337,6 +339,17 @@ fn header(seed: &Seed, start: Option<&SessionStart>) -> Header {
             .unwrap_or(Value::Null),
     );
     extra.insert(
+        "kind".to_string(),
+        seed.kind.clone().map(Value::from).unwrap_or(Value::Null),
+    );
+    extra.insert(
+        "kindSource".to_string(),
+        seed.kind_source
+            .clone()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+    );
+    extra.insert(
         "harnessSessionId".to_string(),
         start
             .map(|value| Value::from(value.harness_session_id.clone()))
@@ -405,6 +418,10 @@ pub struct Summary {
     pub mode: String,
     #[serde(default, rename = "resumedFrom")]
     pub resumed_from: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default, rename = "kindSource")]
+    pub kind_source: Option<String>,
     pub start: String,
     pub end: String,
     #[serde(rename = "durationMs")]

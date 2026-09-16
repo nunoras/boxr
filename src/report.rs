@@ -35,6 +35,10 @@ pub struct Report {
     pub profile: Option<String>,
     #[serde(default, rename = "resumedFrom")]
     pub resumed_from: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default, rename = "kindSource")]
+    pub kind_source: Option<String>,
     pub start: String,
     pub end: String,
     pub duration_ms: u64,
@@ -96,6 +100,9 @@ pub fn render(report: &Report, session: &Session) -> String {
         );
     if let Some(parent) = &report.resumed_from {
         toon.field("resumedFrom", parent);
+    }
+    if let Some(kind) = &report.kind {
+        toon.field("kind", kind);
     }
     toon.number("durationMs", report.duration_ms)
         .number("exitCode", report.exit_code)

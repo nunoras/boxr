@@ -33,6 +33,10 @@ pub struct LaunchFile {
     pub profile: Option<String>,
     #[serde(default)]
     pub resumed_from: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default, rename = "kindSource")]
+    pub kind_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +268,8 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         mode: summary.mode.clone(),
         profile: summary.profile.clone(),
         resumed_from: summary.resumed_from.clone(),
+        kind: summary.kind.clone(),
+        kind_source: summary.kind_source.clone(),
         start: summary.start.clone(),
         end: summary.end.clone(),
         duration_ms: summary.duration_ms,
@@ -301,6 +307,8 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
             .unwrap_or_else(default_headless_mode),
         profile: launch.and_then(|launch| launch.profile.clone()),
         resumed_from: launch.and_then(|launch| launch.resumed_from.clone()),
+        kind: launch.and_then(|launch| launch.kind.clone()),
+        kind_source: launch.and_then(|launch| launch.kind_source.clone()),
         start: iso8601(started),
         end: iso8601(end),
         duration_ms: end.saturating_sub(started) as u64,
@@ -345,6 +353,8 @@ fn append_summary(session: &Session, report: &Report) {
         prompt_tokens: report.prompt_tokens,
         completion_tokens: report.completion_tokens,
         cached_tokens: report.cached_tokens,
+        kind: report.kind.clone(),
+        kind_source: report.kind_source.clone(),
     };
     let _ = ledger::append_summary(&session.summary_path(), &summary);
 }

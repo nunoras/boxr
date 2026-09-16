@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::process::{Child, Command};
 use std::thread::sleep;
@@ -339,6 +339,196 @@ fn the_normalized_ledger_is_a_header_then_atif_steps_then_final_metrics() {
     assert_eq!(lines[2]["source"], "agent");
     assert_eq!(lines[2]["model_name"], "claude-sonnet-5");
     assert_eq!(lines[2]["metrics"]["cached_tokens"], 18538);
+}
+
+#[test]
+fn declared_core_kind_is_recorded_with_its_source() {
+    let harness = Harness::new();
+    let output = harness.run(&[
+        "--harness",
+        "claude",
+        "--model",
+        "sonnet",
+        "--kind",
+        "build",
+        "hello",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
+    assert_eq!(summary["kind"], "build");
+    assert_eq!(summary["kindSource"], "declared");
+    let header = &normalized_lines(&session_dir(&harness).join("normalized.jsonl"))[0];
+    assert_eq!(header["extra"]["kind"], "build");
+    assert_eq!(header["extra"]["kindSource"], "declared");
+}
+
+#[test]
+fn an_unknown_kind_lists_the_valid_kinds() {
+    let harness = Harness::new();
+    let output = harness.run(&[
+        "--harness",
+        "claude",
+        "--model",
+        "sonnet",
+        "--kind",
+        "unknown",
+        "hello",
+    ]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("unknown kind `unknown`"), "{stderr}");
+    assert!(
+        stderr.contains("Valid kinds: build, chore, docs, fix, plan, research, review"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_custom_kind_from_config_is_accepted() {
+    let harness = Harness::new();
+    harness.write_config(r#"{"kinds":{"deploy":"Production deployment work"}}"#);
+    let output = harness.run(&[
+        "--harness",
+        "claude",
+        "--model",
+        "sonnet",
+        "--kind",
+        "deploy",
+        "hello",
+    ]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
+    assert_eq!(summary["kind"], "deploy");
+}
+
+#[test]
+fn stats_without_sessions_prints_an_empty_table() {
+    let harness = Harness::new();
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        stdout.contains("stats[0]{model,kind,sessions,tokens,durationMs}:"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn stats_groups_the_summary_ledger_by_model_and_kind() {
+    let harness = Harness::new();
+    write_summary_fixture(
+        &harness,
+        0,
+        SummaryFixture::new("opus", "build", 10, 20, 30, 40),
+    );
+    write_summary_fixture(
+        &harness,
+        1,
+        SummaryFixture::new("opus", "build", 1, 2, 3, 4),
+    );
+    write_summary_fixture(
+        &harness,
+        2,
+        SummaryFixture::new("sonnet", "review", 5, 6, 7, 8),
+    );
+
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        stdout.contains("stats[2]{model,kind,sessions,tokens,durationMs}:"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("opus,build,2,66,44"), "{stdout}");
+    assert!(stdout.contains("sonnet,review,1,18,8"), "{stdout}");
+}
+
+#[test]
+fn stats_groups_ten_thousand_sessions_in_under_a_second() {
+    let harness = Harness::new();
+    for index in 0..10_000 {
+        write_summary_fixture(
+            &harness,
+            index,
+            SummaryFixture::new("sonnet", "build", 1, 2, 3, 4),
+        );
+    }
+
+    let started = Instant::now();
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+    let elapsed = started.elapsed();
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(elapsed < Duration::from_secs(1), "stats took {elapsed:?}");
+}
+
+struct SummaryFixture<'a> {
+    model: &'a str,
+    kind: &'a str,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    cached_tokens: u64,
+    duration_ms: u64,
+}
+
+impl<'a> SummaryFixture<'a> {
+    fn new(
+        model: &'a str,
+        kind: &'a str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: u64,
+        duration_ms: u64,
+    ) -> SummaryFixture<'a> {
+        SummaryFixture {
+            model,
+            kind,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            duration_ms,
+        }
+    }
+}
+
+fn write_summary_fixture(harness: &Harness, index: usize, fixture: SummaryFixture<'_>) {
+    let home = harness.boxr_home();
+    fs::create_dir_all(&home).expect("boxr home");
+    let line = json!({
+        "id": format!("s-{index}"),
+        "harness": "claude",
+        "model": fixture.model,
+        "effort": "high",
+        "profile": "work",
+        "mode": "headless",
+        "start": "2099-01-01T00:00:00.000Z",
+        "end": "2099-01-01T00:00:00.004Z",
+        "durationMs": fixture.duration_ms,
+        "status": "ok",
+        "exitCode": 0,
+        "steps": 1,
+        "promptTokens": fixture.prompt_tokens,
+        "completionTokens": fixture.completion_tokens,
+        "cachedTokens": fixture.cached_tokens,
+        "kind": fixture.kind,
+        "kindSource": "declared"
+    });
+    let encoded = serde_json::to_string(&line).expect("summary fixture");
+    use std::io::Write;
+    writeln!(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.join("summary.jsonl"))
+            .expect("summary ledger"),
+        "{encoded}"
+    )
+    .expect("summary line");
 }
 
 #[test]
