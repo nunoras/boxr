@@ -38,6 +38,17 @@ Detached sessions are managed with `boxr ps`, `boxr wait <id>` (optional timeout
 `boxr resume <id> "<prompt>"` continues a session.
 If boxr crashes, the harness process is killed rather than orphaned, and the session is marked interrupted.
 
+#### Supervising a detached session
+
+Every headless launch writes a launch record and its supervisor pid into the session directory, so a session can be observed while it runs.
+`--detach` spawns a second boxr process into its own session, which supervises the harness and writes the launch result and the summary line, while the launching boxr exits.
+`boxr ps` lists every session whose supervisor is still alive, foreground or detached.
+`boxr status` reports a running session without blocking and the launch result of a finished one, and `boxr wait` blocks until the result exists.
+`boxr tail` streams the normalized ledger as it is appended.
+A session whose supervisor is gone and whose summary line is missing is recorded as interrupted the first time `ps`, `status` or `wait` looks at it, so a killed supervisor still leaves one summarized session.
+`boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
+The harness dies with boxr: on Linux it is given `PR_SET_PDEATHSIG`, and on Windows it joins a job object that kills it when boxr exits.
+
 ### Interactive (`--interactive`)
 
 boxr sets up the account environment and runs the harness TUI in the terminal it was called from.

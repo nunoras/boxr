@@ -1,8 +1,10 @@
 use crate::clock::{iso8601, now_millis};
+use crate::detached::{self, LaunchFile};
 use crate::fail::Fail;
 use crate::harness::{apply_config_dir, Harness, HarnessSession, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
-use crate::ledger::{self, Follower, Seed, SessionStart, Summary, Tally};
+use crate::ledger::{self, Follower, Seed, SessionStart, Summary};
+use crate::report::{self, Ledger, Report};
 use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
 use std::env;
@@ -14,28 +16,56 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Once, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-pub enum Ledger {
-    Recorded(PathBuf),
-    Failed(String),
-}
+const STOP_POLL: Duration = Duration::from_millis(50);
 
-pub struct Outcome {
+pub struct Launch {
     pub session: Session,
-    pub exit_code: i32,
-    pub harness_session_id: Option<String>,
-    pub final_message: Option<String>,
-    pub ledger: Ledger,
-    pub duration_ms: u128,
-    pub tally: Tally,
-    pub summary: Summary,
-    pub summary_path: PathBuf,
-    pub summary_error: Option<String>,
+    program: PathBuf,
 }
 
-impl Outcome {
-    pub fn succeeded(&self) -> bool {
-        self.exit_code == 0
+pub fn prepare(harness: &Arc<dyn Harness>, request: &LaunchRequest, home: &Path) -> Result<Launch> {
+    let session = Session::plan(home);
+    let program = program_of(harness, request, &session)?;
+    session.materialize()?;
+    Ok(Launch { session, program })
+}
+
+pub fn harness_session_of(session: &Session) -> HarnessSession {
+    HarnessSession {
+        session_id: session.id.clone(),
+        dir: session.harness_dir(),
     }
+}
+
+pub fn adopt(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    session: Session,
+) -> Result<Launch> {
+    let program = program_of(harness, request, &session)?;
+    session.materialize()?;
+    Ok(Launch { session, program })
+}
+
+fn program_of(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    session: &Session,
+) -> Result<PathBuf> {
+    let command = harness.command(request, &harness_session_of(session))?;
+    locate(&command.program).ok_or_else(|| {
+        Fail::harness_unavailable(
+            format!(
+                "harness executable `{}` was not found on PATH",
+                command.program
+            ),
+            vec![format!(
+                "Install {} or put its executable on PATH",
+                harness.id()
+            )],
+        )
+        .into()
+    })
 }
 
 struct Supervised(Child);
@@ -49,35 +79,39 @@ impl Drop for Supervised {
     }
 }
 
+pub struct Account<'a> {
+    pub name: Option<&'a str>,
+    pub dir: Option<&'a Path>,
+}
+
 pub fn headless(
     harness: &Arc<dyn Harness>,
     request: &LaunchRequest,
-    account: Option<&Path>,
-    home: &Path,
-) -> Result<Outcome> {
-    let session = Session::plan(home);
-    let harness_session = HarnessSession {
-        session_id: session.id.clone(),
-        dir: session.harness_dir(),
-    };
+    account: Account<'_>,
+    launch: Launch,
+) -> Result<Report> {
+    let Launch { session, program } = launch;
+    let harness_session = harness_session_of(&session);
     let mut command = harness.command(request, &harness_session)?;
-    apply_config_dir(&mut command, harness.as_ref(), account);
-    let program = locate(&command.program).ok_or_else(|| {
-        Fail::harness_unavailable(
-            format!(
-                "harness executable `{}` was not found on PATH",
-                command.program
-            ),
-            vec![format!(
-                "Install {} or put its executable on PATH",
-                harness.id()
-            )],
-        )
-    })?;
-
+    apply_config_dir(&mut command, harness.as_ref(), account.dir);
     let started = Instant::now();
     let started_at = now_millis();
-    let mut spawned = Command::new(&program)
+    detached::record_launch(
+        &session,
+        &LaunchFile {
+            harness: harness.id().to_string(),
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            prompt: request.prompt.clone(),
+            cwd: request.cwd.clone(),
+            account: account.name.map(str::to_string),
+            started_millis: started_at as u64,
+        },
+    )?;
+    detached::record_supervisor(&session, std::process::id())?;
+
+    let mut builder = Command::new(&program);
+    builder
         .args(&command.args)
         .envs(command.env.iter().map(|(key, value)| (key, value)))
         .current_dir(&request.cwd)
@@ -87,9 +121,12 @@ pub fn headless(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    die_with_parent(&mut builder);
+    let mut spawned = builder
         .spawn()
         .with_context(|| format!("starting harness {}", program.display()))?;
+    let _job = guard_children(&spawned);
 
     let stdin_pipe = spawned.stdin.take();
     let stdout = spawned
@@ -102,8 +139,8 @@ pub fn headless(
         .ok_or_else(|| anyhow!("harness stderr was not captured"))?;
     let child = Arc::new(Mutex::new(Supervised(spawned)));
     let stop = watch_for_stop(&child);
+    watch_stop_file(&stop, session.stop_path());
 
-    session.materialize()?;
     let follower = Follower::start(
         Arc::clone(harness),
         harness_session.clone(),
@@ -114,9 +151,9 @@ pub fn headless(
             model: request.model.clone(),
             effort: request.effort.clone(),
             mode: "headless".to_string(),
-            profile: None,
+            profile: account.name.map(str::to_string),
         },
-        account.map(Path::to_path_buf),
+        account.dir.map(Path::to_path_buf),
     );
     let stream_path = session.stream_path();
     let mut stream_file = create_private_file(&stream_path)?;
@@ -183,7 +220,7 @@ pub fn headless(
         harness.as_ref(),
         &harness_session,
         harness_session_id.as_deref(),
-        account,
+        account.dir,
         &session,
     ) {
         Ok(path) => Ledger::Recorded(path),
@@ -191,19 +228,18 @@ pub fn headless(
     };
 
     let exit_code = exit_code_of(&status);
-    let duration_ms = started.elapsed().as_millis();
-    let ended_at = now_millis();
+    let duration_ms = started.elapsed().as_millis() as u64;
     let summary = Summary {
         id: session.id.clone(),
         harness: harness.id().to_string(),
         harness_session_id: harness_session_id.clone(),
         model: request.model.clone(),
         effort: request.effort.clone(),
-        profile: None,
+        profile: account.name.map(str::to_string),
         mode: "headless".to_string(),
         start: iso8601(started_at),
-        end: iso8601(ended_at),
-        duration_ms: duration_ms as u64,
+        end: iso8601(now_millis()),
+        duration_ms,
         status: status_of(&status, stop.was_requested()).to_string(),
         exit_code,
         steps: tally.steps,
@@ -211,23 +247,39 @@ pub fn headless(
         completion_tokens: tally.completion_tokens,
         cached_tokens: tally.cached_tokens,
     };
-    let summary_path = home.join(ledger::SUMMARY_FILE);
-    let summary_error = ledger::append_summary(&summary_path, &summary)
+    let mut summary_error = ledger::append_summary(&session.summary_path(), &summary)
         .err()
         .map(|error| format!("{error:#}"));
+
+    let report = Report {
+        id: session.id.clone(),
+        status: summary.status.clone(),
+        harness: harness.id().to_string(),
+        model: request.model.clone(),
+        effort: request.effort.clone(),
+        account: account.name.map(str::to_string),
+        harness_session_id,
+        start: summary.start.clone(),
+        end: summary.end.clone(),
+        duration_ms,
+        exit_code,
+        final_message,
+        steps: tally.steps,
+        prompt_tokens: tally.prompt_tokens,
+        completion_tokens: tally.completion_tokens,
+        cached_tokens: tally.cached_tokens,
+        capture_error: tally.error,
+        summary_error: summary_error.clone(),
+        ledger,
+    };
+    if let Err(error) = report::write(&session.report_path(), &report) {
+        summary_error.get_or_insert_with(|| format!("{error:#}"));
+    }
     stop.finalize();
 
-    Ok(Outcome {
-        session,
-        exit_code,
-        harness_session_id,
-        final_message,
-        ledger,
-        duration_ms,
-        tally,
-        summary,
-        summary_path,
+    Ok(Report {
         summary_error,
+        ..report
     })
 }
 
@@ -259,6 +311,36 @@ fn stopped_externally(status: &ExitStatus) -> bool {
     status.code() == Some(STATUS_CONTROL_C_EXIT)
 }
 
+#[cfg(target_os = "linux")]
+fn die_with_parent(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let parent = unsafe { libc::getpid() };
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_command: &mut Command) {}
+
+#[cfg(windows)]
+fn guard_children(child: &Child) -> Option<crate::job::JobGuard> {
+    crate::job::guard(child).ok()
+}
+
+#[cfg(not(windows))]
+fn guard_children(_child: &Child) -> Option<()> {
+    None
+}
+
 struct StopRequest {
     child: Weak<Mutex<Supervised>>,
     requested: AtomicBool,
@@ -286,6 +368,13 @@ impl StopRequest {
         self.finalized_changed.notify_all();
     }
 
+    fn is_finalized(&self) -> bool {
+        *self
+            .finalized
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     #[cfg(windows)]
     fn await_finalized(&self, budget: Duration) {
         let finalized = self
@@ -311,6 +400,19 @@ fn watch_for_stop(child: &Arc<Mutex<Supervised>>) -> Arc<StopRequest> {
     *ACTIVE_STOP.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&stop));
     STOP_HANDLER.call_once(install_stop_handler);
     stop
+}
+
+fn watch_stop_file(stop: &Arc<StopRequest>, path: PathBuf) {
+    let stop = Arc::clone(stop);
+    std::thread::spawn(move || {
+        while !stop.is_finalized() {
+            if path.exists() {
+                stop.request();
+                return;
+            }
+            std::thread::sleep(STOP_POLL);
+        }
+    });
 }
 
 fn active_stop() -> Option<Arc<StopRequest>> {
