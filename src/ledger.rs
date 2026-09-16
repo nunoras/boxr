@@ -294,15 +294,9 @@ fn follow_file(
 ) -> Result<()> {
     let mut source =
         File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
-    let len = source
-        .metadata()
-        .with_context(|| format!("reading {}", transcript.display()))?
-        .len();
     source
         .seek(SeekFrom::Start(from_bytes))
         .with_context(|| format!("seeking in {}", transcript.display()))?;
-    let mut dropping_partial =
-        from_bytes > 0 && from_bytes < len && !starts_a_line(transcript, from_bytes)?;
     let mut pending = Vec::new();
     loop {
         let finished = stop.load(Ordering::SeqCst);
@@ -311,10 +305,6 @@ fn follow_file(
             .with_context(|| format!("reading {}", transcript.display()))?;
         while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=index).collect();
-            if dropping_partial {
-                dropping_partial = false;
-                continue;
-            }
             if let Some(entry) = harness.transcript_entry(String::from_utf8_lossy(&line).trim_end())
             {
                 normalizer.accept(entry)?;
@@ -325,19 +315,6 @@ fn follow_file(
         }
         thread::sleep(POLL);
     }
-}
-
-fn starts_a_line(transcript: &Path, offset: u64) -> Result<bool> {
-    let mut source =
-        File::open(transcript).with_context(|| format!("opening {}", transcript.display()))?;
-    source
-        .seek(SeekFrom::Start(offset - 1))
-        .with_context(|| format!("seeking in {}", transcript.display()))?;
-    let mut previous = [0u8; 1];
-    source
-        .read_exact(&mut previous)
-        .with_context(|| format!("reading {}", transcript.display()))?;
-    Ok(previous[0] == b'\n')
 }
 
 fn header(seed: &Seed, start: Option<&SessionStart>) -> Header {
