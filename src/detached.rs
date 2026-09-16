@@ -33,7 +33,7 @@ pub struct SupervisorFile {
 }
 
 pub struct Running {
-    pub pid: u32,
+    pub pid: Option<u32>,
     pub launch: LaunchFile,
     pub steps: u64,
 }
@@ -82,32 +82,40 @@ pub fn request_stop(session: &Session) -> Result<()> {
 
 pub fn state(home: &Path, id: &str) -> Result<State> {
     let session = Session::open(home, id);
-    if let Some(summary) = ledger::find_summary(home, id)? {
-        return Ok(State::Finished(Box::new(finished(&session, &summary)?)));
-    }
     let launch = read_record::<LaunchFile>(&session.launch_path())?;
     let supervisor = read_record::<SupervisorFile>(&session.supervisor_path())?;
-    if launch.is_none() && supervisor.is_none() {
-        return Err(no_session(id));
-    }
     if let Some(supervisor) = &supervisor {
         if alive(supervisor.pid) {
             let launch = launch.ok_or_else(|| anyhow!("session {id} has no launch record"))?;
             let steps = ledger::totals(&session.normalized_path()).steps;
             return Ok(State::Running(Running {
-                pid: supervisor.pid,
+                pid: Some(supervisor.pid),
                 launch,
                 steps,
             }));
         }
     }
+    if let Some(summary) = ledger::find_summary(home, id)? {
+        return Ok(State::Finished(Box::new(finished(&session, &summary)?)));
+    }
     if let Some(report) = read_record::<Report>(&session.report_path())? {
         append_summary(&session, &report);
         return Ok(State::Finished(Box::new(report)));
     }
-    let report = interrupted(&session, launch.as_ref());
-    append_summary(&session, &report);
-    Ok(State::Finished(Box::new(report)))
+    if supervisor.is_some() {
+        let report = interrupted(&session, launch.as_ref());
+        append_summary(&session, &report);
+        return Ok(State::Finished(Box::new(report)));
+    }
+    if let Some(launch) = launch {
+        let steps = ledger::totals(&session.normalized_path()).steps;
+        return Ok(State::Running(Running {
+            pid: None,
+            launch,
+            steps,
+        }));
+    }
+    Err(no_session(id))
 }
 
 fn no_session(id: &str) -> anyhow::Error {
@@ -119,12 +127,9 @@ fn no_session(id: &str) -> anyhow::Error {
 }
 
 pub fn running(session: &Session) -> Result<bool> {
-    if session.report_path().is_file() {
-        return Ok(false);
-    }
     match read_record::<SupervisorFile>(&session.supervisor_path())? {
         Some(supervisor) => Ok(alive(supervisor.pid)),
-        None => Ok(false),
+        None => Ok(session.launch_path().is_file() && !session.report_path().is_file()),
     }
 }
 
@@ -330,5 +335,7 @@ fn read_record<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
             return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
         }
     };
-    Ok(serde_json::from_str(&text).ok())
+    serde_json::from_str(&text)
+        .map(Some)
+        .with_context(|| format!("parsing {}", path.display()))
 }

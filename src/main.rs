@@ -534,22 +534,21 @@ fn supervise(id: &str) -> Result<i32> {
 
 fn ps() -> Result<i32> {
     let home = home::boxr_home()?;
-    let finished = ledger::summary_ids(&home)?;
     let mut ids = Vec::new();
     let mut rows = Vec::new();
     for id in Session::ids(&home)? {
-        if finished.contains(&id) {
-            continue;
-        }
         let Ok(state) = detached::state(&home, &id) else {
             continue;
         };
         if let State::Running(running) = state {
+            let pid = running
+                .pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "-".to_string());
             rows.push(format!(
-                "{id} {} {} {} {} {}",
+                "{id} {} {} {pid} {} {}",
                 running.launch.harness,
                 running.launch.model,
-                running.pid,
                 clock::iso8601(running.launch.started_millis as u128),
                 running.steps
             ));
@@ -599,12 +598,14 @@ fn render_running(session: &Session, running: &detached::Running) -> String {
                 .as_deref()
                 .unwrap_or("harness-default"),
         )
-        .number("pid", running.pid)
         .field(
             "started",
             &clock::iso8601(running.launch.started_millis as u128),
         )
         .number("steps", running.steps);
+    if let Some(pid) = running.pid {
+        toon.number("pid", pid);
+    }
     toon.list(
         "help",
         &[
@@ -684,7 +685,10 @@ fn stop(id: &str) -> Result<i32> {
         action = "stopped";
         detached::request_stop(&session)?;
         if detached::finish(&home, id, STOP_BUDGET).is_err() {
-            detached::hard_kill(running.pid);
+            let pid = running.pid.ok_or_else(|| {
+                anyhow::anyhow!("session {id} is still starting and has no supervisor to stop")
+            })?;
+            detached::hard_kill(pid);
             detached::finish(&home, id, KILL_BUDGET)?;
         }
     }

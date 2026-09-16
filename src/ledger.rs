@@ -427,22 +427,6 @@ pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
         .find(|summary| summary.id == id))
 }
 
-pub fn summary_ids(home: &Path) -> Result<HashSet<String>> {
-    let path = home.join(SUMMARY_FILE);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
-        Err(error) => {
-            return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
-        }
-    };
-    Ok(text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Summary>(line).ok())
-        .map(|summary| summary.id)
-        .collect())
-}
-
 pub fn totals(normalized: &Path) -> Tally {
     let mut tally = Tally::default();
     let Ok(text) = fs::read_to_string(normalized) else {

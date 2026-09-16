@@ -493,3 +493,165 @@ fn ps_keeps_listing_a_detached_session_until_it_finishes() {
     assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
     assert!(ps_sessions(&stdout_of(&harness.run(&["ps"]))).is_empty());
 }
+
+fn append_summary_line(harness: &Harness, id: &str, status: &str) {
+    let path = harness.boxr_home().join("summary.jsonl");
+    let line = serde_json::json!({
+        "id": id,
+        "harness": "claude",
+        "model": "opus",
+        "mode": "headless",
+        "start": "2026-01-01T00:00:00.000Z",
+        "end": "2026-01-01T00:00:01.000Z",
+        "durationMs": 1000,
+        "status": status,
+        "exitCode": 0,
+        "steps": 1,
+        "promptTokens": 1,
+        "completionTokens": 1,
+        "cachedTokens": 0
+    })
+    .to_string();
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| {
+            use std::io::Write;
+            writeln!(file, "{line}")
+        })
+        .expect("append a summary line");
+}
+
+fn write_launch_only_session(harness: &Harness, id: &str) {
+    let dir = harness.boxr_home().join("sessions").join(id);
+    fs::create_dir_all(dir.join("raw")).expect("session dir");
+    let launch = serde_json::json!({
+        "harness": "claude",
+        "model": "opus",
+        "prompt": "review",
+        "cwd": harness.root.path().join("work"),
+        "startedMillis": 1
+    })
+    .to_string();
+    fs::write(dir.join("launch.json"), format!("{launch}\n")).expect("launch.json");
+}
+
+#[test]
+fn a_live_supervisor_beats_a_premature_summary_line() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_after(9);
+
+    let id = detach(&harness, "review");
+    let harness_pid = harness.harness_pid();
+    append_summary_line(&harness, &id, "ok");
+
+    let status = stdout_of(&harness.run(&["status", &id]));
+    assert!(
+        status.contains("status: running"),
+        "status finished early while the supervisor was alive:\n{status}"
+    );
+    let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
+    assert!(
+        rows.iter().any(|row| row.starts_with(&id)),
+        "`boxr ps` hid a live supervisor because of a summary line: {rows:?}"
+    );
+
+    let stopped = harness.run(&["stop", &id]);
+    let stdout = stdout_of(&stopped);
+    assert_eq!(stopped.status.code(), Some(0), "{}", stderr_of(&stopped));
+    assert!(
+        stdout.contains("action: stopped"),
+        "stop took the already-finished path while the supervisor was alive:\n{stdout}"
+    );
+    await_process_gone(harness_pid);
+}
+
+#[test]
+fn a_launch_record_without_a_supervisor_is_still_starting() {
+    let harness = Harness::new();
+    let id = "s-starting";
+    write_launch_only_session(&harness, id);
+
+    let status = stdout_of(&harness.run(&["status", id]));
+    assert!(
+        status.contains("status: running"),
+        "launch without supervisor was treated as finished:\n{status}"
+    );
+    let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
+    assert!(
+        rows.iter().any(|row| row.starts_with(id)),
+        "`boxr ps` skipped a starting session: {rows:?}"
+    );
+    assert!(
+        !harness.boxr_home().join("summary.jsonl").is_file(),
+        "a starting session was permanently summarized as interrupted"
+    );
+
+    let timed_out = harness.run(&["wait", "--timeout", "1", id]);
+    assert_eq!(
+        timed_out.status.code(),
+        Some(6),
+        "wait settled a starting session: {}",
+        stdout_of(&timed_out)
+    );
+    assert!(
+        !harness.boxr_home().join("summary.jsonl").is_file(),
+        "wait finalized a starting session as interrupted"
+    );
+}
+
+#[test]
+fn a_corrupt_supervisor_record_is_not_treated_as_absence() {
+    let harness = Harness::new();
+    let id = "s-corrupt";
+    write_launch_only_session(&harness, id);
+    fs::write(
+        harness
+            .boxr_home()
+            .join("sessions")
+            .join(id)
+            .join("supervisor.json"),
+        "{not-json\n",
+    )
+    .expect("corrupt supervisor.json");
+
+    let status = harness.run(&["status", id]);
+    assert_ne!(
+        status.status.code(),
+        Some(0),
+        "corrupt supervisor.json was soft-ignored: {}",
+        stdout_of(&status)
+    );
+    assert!(
+        !harness.boxr_home().join("summary.jsonl").is_file(),
+        "corrupt supervisor.json finalized the session as interrupted"
+    );
+    let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
+    assert!(
+        !rows.iter().any(|row| row.starts_with(id)),
+        "corrupt supervisor.json still listed the session as running: {rows:?}"
+    );
+}
+
+#[test]
+fn a_job_guard_failure_fails_the_launch() {
+    let harness = Harness::new();
+    let mut command = harness.command(
+        &["--harness", "claude", "--model", "opus", "hello"],
+        Some(&harness.root.path().join("bin")),
+    );
+    command.env("BOXR_TEST_FAIL_JOB_GUARD", "1");
+    let output = command.output().expect("boxr runs");
+    let stderr = stderr_of(&output);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "launch continued without a process guard: {stderr}"
+    );
+    assert!(
+        stderr.contains("process guard") || stderr.contains("job object guard"),
+        "{stderr}"
+    );
+}

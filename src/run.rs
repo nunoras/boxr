@@ -126,7 +126,7 @@ pub fn headless(
     let mut spawned = builder
         .spawn()
         .with_context(|| format!("starting harness {}", program.display()))?;
-    let _job = guard_children(&spawned);
+    let _job = guard_children(&spawned)?;
 
     let stdin_pipe = spawned.stdin.take();
     let stdout = spawned
@@ -332,13 +332,19 @@ fn die_with_parent(command: &mut Command) {
 fn die_with_parent(_command: &mut Command) {}
 
 #[cfg(windows)]
-fn guard_children(child: &Child) -> Option<crate::job::JobGuard> {
-    crate::job::guard(child).ok()
+fn guard_children(child: &Child) -> Result<crate::job::JobGuard> {
+    if env::var_os("BOXR_TEST_FAIL_JOB_GUARD").is_some() {
+        return Err(anyhow!("refusing to launch without a job object guard"));
+    }
+    crate::job::guard(child)
 }
 
 #[cfg(not(windows))]
-fn guard_children(_child: &Child) -> Option<()> {
-    None
+fn guard_children(_child: &Child) -> Result<()> {
+    if env::var_os("BOXR_TEST_FAIL_JOB_GUARD").is_some() {
+        return Err(anyhow!("refusing to launch without a process guard"));
+    }
+    Ok(())
 }
 
 struct StopRequest {
