@@ -4,8 +4,10 @@ use common::*;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::thread::sleep;
+use std::sync::Arc;
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
 fn supervisor_pid(harness: &Harness, id: &str) -> u32 {
@@ -659,17 +661,8 @@ fn a_job_guard_failure_fails_the_launch() {
         "{stderr}"
     );
 
-    if let Some(pid) = wait_for_optional_pid(&pid_file, Duration::from_secs(2)) {
-        await_process_gone(pid);
-    } else {
-        sleep(Duration::from_millis(500));
-        if let Some(pid) = wait_for_optional_pid(&pid_file, Duration::from_millis(200)) {
-            assert!(
-                !process_alive(pid),
-                "guard failure left harness {pid} running"
-            );
-        }
-    }
+    let pid = await_pid_file(&pid_file);
+    await_process_gone(pid);
 }
 
 fn install_orphan_harness(bin_dir: &std::path::Path, pid_file: &std::path::Path) {
@@ -689,7 +682,7 @@ fn install_orphan_harness(bin_dir: &std::path::Path, pid_file: &std::path::Path)
     #[cfg(windows)]
     {
         let script = format!(
-            "@echo %RANDOM%%RANDOM% > {pid}\r\n@powershell -NoProfile -Command \"Set-Content -Path '{pid}' -Value $PID; Start-Sleep -Seconds 60\"\r\n",
+            "@powershell -NoProfile -Command \"Set-Content -Path '{pid}' -Value $PID; Start-Sleep -Seconds 60\"\r\n",
             pid = pid_file.display()
         );
         fs::remove_file(bin_dir.join("claude.exe")).ok();
@@ -697,15 +690,85 @@ fn install_orphan_harness(bin_dir: &std::path::Path, pid_file: &std::path::Path)
     }
 }
 
-fn wait_for_optional_pid(path: &std::path::Path, budget: Duration) -> Option<u32> {
-    let deadline = Instant::now() + budget;
-    while Instant::now() < deadline {
+fn await_pid_file(path: &std::path::Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
         if let Ok(text) = fs::read_to_string(path) {
             if let Ok(pid) = text.trim().parse::<u32>() {
-                return Some(pid);
+                return pid;
             }
         }
+        assert!(
+            Instant::now() < deadline,
+            "the harness never wrote {}",
+            path.display()
+        );
         sleep(Duration::from_millis(20));
     }
-    None
+}
+
+#[test]
+fn a_failed_detach_does_not_leave_a_stuck_or_running_session() {
+    let harness = Harness::new();
+    let sessions = harness.boxr_home().join("sessions");
+    fs::create_dir_all(&sessions).expect("sessions dir");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let sessions_watch = sessions.clone();
+    let poisoner = thread::spawn(move || {
+        while !stop_flag.load(Ordering::SeqCst) {
+            if let Ok(entries) = fs::read_dir(&sessions_watch) {
+                for entry in entries.flatten() {
+                    let dir = entry.path();
+                    if !dir.is_dir() {
+                        continue;
+                    }
+                    let log = dir.join("supervisor.log");
+                    if !log.exists() {
+                        let _ = fs::create_dir(&log);
+                    }
+                }
+            }
+        }
+    });
+
+    let output = harness.run(&[
+        "--detach",
+        "--harness",
+        "claude",
+        "--model",
+        "opus",
+        "hello",
+    ]);
+    stop.store(true, Ordering::SeqCst);
+    poisoner.join().expect("poisoner thread");
+
+    let stderr = stderr_of(&output);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "detach should fail when the supervisor cannot start: {stderr}"
+    );
+
+    let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
+    assert!(
+        rows.is_empty(),
+        "failed detach left a session listed by ps: {rows:?}"
+    );
+
+    let mut entries: Vec<_> = fs::read_dir(&sessions)
+        .map(|dirs| dirs.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    entries.sort();
+    let dir = entries.last().expect("a session directory from the failed detach");
+    let id = dir.file_name().unwrap().to_string_lossy().to_string();
+    let status = stdout_of(&harness.run(&["status", &id]));
+    assert!(
+        status.contains("status: interrupted"),
+        "failed detach left session {id} unfinalized:\n{status}"
+    );
+    assert!(
+        !status.contains("status: running"),
+        "failed detach left session {id} running:\n{status}"
+    );
 }

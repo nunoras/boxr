@@ -341,6 +341,7 @@ fn die_with_parent(_command: &mut Command) {}
 #[cfg(windows)]
 fn guard_children(child: &Child) -> Result<crate::job::JobGuard> {
     if env::var_os("BOXR_TEST_FAIL_JOB_GUARD").is_some() {
+        std::thread::sleep(Duration::from_millis(200));
         return Err(anyhow!("refusing to launch without a job object guard"));
     }
     crate::job::guard(child)
@@ -349,6 +350,7 @@ fn guard_children(child: &Child) -> Result<crate::job::JobGuard> {
 #[cfg(not(windows))]
 fn guard_children(_child: &Child) -> Result<()> {
     if env::var_os("BOXR_TEST_FAIL_JOB_GUARD").is_some() {
+        std::thread::sleep(Duration::from_millis(200));
         return Err(anyhow!("refusing to launch without a process guard"));
     }
     Ok(())

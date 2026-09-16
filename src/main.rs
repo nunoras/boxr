@@ -314,8 +314,17 @@ fn detach(
             started_millis: clock::now_millis() as u64,
         },
     )?;
-    let pid = detached::spawn_supervisor(&session)?;
-    detached::record_supervisor(&session, pid)?;
+    let pid = match detached::spawn_supervisor(&session) {
+        Ok(pid) => pid,
+        Err(error) => {
+            detached::abandon_detach(home, &session, None);
+            return Err(error);
+        }
+    };
+    if let Err(error) = detached::record_supervisor(&session, pid) {
+        detached::abandon_detach(home, &session, Some(pid));
+        return Err(error);
+    }
     print!("{}", render_detached(&session, harness, request, pid));
     Ok(EXIT_OK)
 }

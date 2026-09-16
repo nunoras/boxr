@@ -2,7 +2,7 @@ use crate::clock::{iso8601, now_millis};
 use crate::fail::Fail;
 use crate::home::restrict_file;
 use crate::ledger::{self, Summary};
-use crate::report::{Ledger, Report};
+use crate::report::{self, Ledger, Report};
 use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -78,6 +78,30 @@ pub fn spawn_supervisor(session: &Session) -> Result<u32> {
 pub fn request_stop(session: &Session) -> Result<()> {
     let path = session.stop_path();
     fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn abandon_detach(home: &Path, session: &Session, supervisor_pid: Option<u32>) {
+    if let Some(pid) = supervisor_pid {
+        hard_kill(pid);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::sleep(POLL);
+        }
+        let path = session.supervisor_path();
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&path);
+        let _ = record_supervisor(session, pid);
+        let _ = state(home, &session.id);
+        return;
+    }
+    if session.supervisor_path().is_file() {
+        let _ = state(home, &session.id);
+        return;
+    }
+    let launch = read_launch(session).ok().flatten();
+    let report = interrupted(session, launch.as_ref());
+    let _ = report::write(&session.report_path(), &report);
+    append_summary(session, &report);
 }
 
 pub fn state(home: &Path, id: &str) -> Result<State> {
