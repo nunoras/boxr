@@ -5,7 +5,7 @@ use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 pub const DEFAULT_CONFIG_DIR: &str = ".claude";
@@ -32,7 +32,21 @@ impl Harness for ClaudeCode {
             program: "claude".to_string(),
             args,
             stdin: Some(request.prompt.clone()),
+            env: Vec::new(),
         })
+    }
+
+    fn login_command(&self) -> Result<HarnessCommand> {
+        Ok(HarnessCommand {
+            program: "claude".to_string(),
+            args: ["auth", "login"].map(str::to_string).to_vec(),
+            stdin: None,
+            env: Vec::new(),
+        })
+    }
+
+    fn config_dir_env(&self) -> Option<&'static str> {
+        Some(CONFIG_DIR_ENV)
     }
 
     fn parse_event(&self, line: &str) -> StreamEvent {
@@ -60,12 +74,19 @@ impl Harness for ClaudeCode {
         }
     }
 
-    fn transcript(&self, _session: &HarnessSession, harness_session_id: &str) -> Result<PathBuf> {
-        let projects = config_dir(CONFIG_DIR_ENV, DEFAULT_CONFIG_DIR)
-            .ok_or_else(|| {
+    fn transcript(
+        &self,
+        _session: &HarnessSession,
+        harness_session_id: &str,
+        account: Option<&Path>,
+    ) -> Result<PathBuf> {
+        let root = match account {
+            Some(dir) => dir.to_path_buf(),
+            None => config_dir(CONFIG_DIR_ENV, DEFAULT_CONFIG_DIR).ok_or_else(|| {
                 anyhow!("cannot locate the claude config directory; set {CONFIG_DIR_ENV}")
-            })?
-            .join("projects");
+            })?,
+        };
+        let projects = root.join("projects");
         let wanted = format!("{harness_session_id}.jsonl");
         let entries =
             fs::read_dir(&projects).with_context(|| format!("reading {}", projects.display()))?;

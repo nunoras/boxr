@@ -1,6 +1,6 @@
 use crate::clock::{iso8601, now_millis};
 use crate::fail::Fail;
-use crate::harness::{Harness, HarnessSession, LaunchRequest, StreamEvent};
+use crate::harness::{apply_config_dir, Harness, HarnessSession, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
 use crate::ledger::{self, Follower, Seed, SessionStart, Summary, Tally};
 use crate::session::Session;
@@ -52,6 +52,7 @@ impl Drop for Supervised {
 pub fn headless(
     harness: &Arc<dyn Harness>,
     request: &LaunchRequest,
+    account: Option<&Path>,
     home: &Path,
 ) -> Result<Outcome> {
     let session = Session::plan(home);
@@ -59,7 +60,8 @@ pub fn headless(
         session_id: session.id.clone(),
         dir: session.harness_dir(),
     };
-    let command = harness.command(request, &harness_session)?;
+    let mut command = harness.command(request, &harness_session)?;
+    apply_config_dir(&mut command, harness.as_ref(), account);
     let program = locate(&command.program).ok_or_else(|| {
         Fail::harness_unavailable(
             format!(
@@ -77,6 +79,7 @@ pub fn headless(
     let started_at = now_millis();
     let mut spawned = Command::new(&program)
         .args(&command.args)
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
         .current_dir(&request.cwd)
         .stdin(if command.stdin.is_some() {
             Stdio::piped()
@@ -113,6 +116,7 @@ pub fn headless(
             mode: "headless".to_string(),
             profile: None,
         },
+        account.map(Path::to_path_buf),
     );
     let stream_path = session.stream_path();
     let mut stream_file = create_private_file(&stream_path)?;
@@ -179,6 +183,7 @@ pub fn headless(
         harness.as_ref(),
         &harness_session,
         harness_session_id.as_deref(),
+        account,
         &session,
     ) {
         Ok(path) => Ledger::Recorded(path),
@@ -385,10 +390,11 @@ fn record_transcript(
     harness: &dyn Harness,
     harness_session: &HarnessSession,
     harness_session_id: Option<&str>,
+    account: Option<&Path>,
     session: &Session,
 ) -> Result<PathBuf> {
     let id = harness_session_id.ok_or_else(|| anyhow!("the harness reported no session id"))?;
-    let source = harness.transcript(harness_session, id)?;
+    let source = harness.transcript(harness_session, id, account)?;
     let target = session.transcript_path();
     fs::copy(&source, &target)
         .with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
@@ -396,7 +402,7 @@ fn record_transcript(
     Ok(target)
 }
 
-fn locate(program: &str) -> Option<PathBuf> {
+pub fn locate(program: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
         .flat_map(|dir| {
@@ -440,7 +446,7 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-fn exit_code_of(status: &ExitStatus) -> i32 {
+pub fn exit_code_of(status: &ExitStatus) -> i32 {
     status
         .code()
         .or_else(|| signal_of(status).map(|signal| 128 + signal))

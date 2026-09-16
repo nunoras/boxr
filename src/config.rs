@@ -18,6 +18,7 @@ pub struct Defaults {
     pub harness: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub account: Option<String>,
 }
 
 impl Config {
