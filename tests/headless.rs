@@ -32,7 +32,7 @@ fn headless_launch_prints_a_toon_result_and_exits_zero() {
     );
     assert!(stdout.contains("durationMs: "), "{stdout}");
     assert!(stdout.contains("ledger: recorded"), "{stdout}");
-    assert!(stdout.contains("help[2]:"), "{stdout}");
+    assert!(stdout.contains("help[3]:"), "{stdout}");
 
     let id_line = stdout
         .lines()
@@ -381,7 +381,7 @@ fn show_prints_the_session_as_toon() {
     assert!(stdout.contains("status: ok"), "{stdout}");
     assert!(stdout.contains("mode: headless"), "{stdout}");
     assert!(stdout.contains("completionTokens: 11"), "{stdout}");
-    assert!(stdout.contains("help[1]:"), "{stdout}");
+    assert!(stdout.contains("help[2]:"), "{stdout}");
 }
 
 #[test]

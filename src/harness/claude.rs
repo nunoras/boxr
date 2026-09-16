@@ -1,5 +1,8 @@
 use super::json::{joined_reasoning, joined_text, number_at, text_at};
-use super::{Harness, HarnessCommand, HarnessSession, LaunchRequest, StreamEvent, TranscriptEntry};
+use super::{
+    Harness, HarnessCommand, HarnessSession, LaunchMode, LaunchRequest, StreamEvent,
+    TranscriptEntry,
+};
 use crate::atif::{Metrics, ObservationResult, Step, ToolCall};
 use crate::home::config_dir;
 use anyhow::{anyhow, Context, Result};
@@ -26,6 +29,9 @@ impl Harness for ClaudeCode {
         if let Some(effort) = &request.effort {
             args.push("--effort".to_string());
             args.push(effort.clone());
+        }
+        if let LaunchMode::Resume { harness_session_id } = &request.mode {
+            args.extend(["--resume".to_string(), harness_session_id.clone()]);
         }
         args.extend(["--output-format", "stream-json", "--verbose", "-p"].map(str::to_string));
         Ok(HarnessCommand {

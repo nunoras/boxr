@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 pub const SUPERVISOR_COMMAND: &str = "__supervise";
 pub const POLL: Duration = Duration::from_millis(50);
 
+fn default_headless_mode() -> String {
+    "headless".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchFile {
@@ -22,9 +26,13 @@ pub struct LaunchFile {
     pub effort: Option<String>,
     pub prompt: String,
     pub cwd: std::path::PathBuf,
-    #[serde(default)]
-    pub account: Option<String>,
     pub started_millis: u64,
+    #[serde(default = "default_headless_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub resumed_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +47,7 @@ pub struct Running {
 }
 
 pub enum State {
-    Running(Running),
+    Running(Box<Running>),
     Finished(Box<Report>),
 }
 
@@ -101,11 +109,11 @@ pub fn state(home: &Path, id: &str) -> Result<State> {
         if alive(supervisor.pid) {
             let launch = launch.ok_or_else(|| anyhow!("session {id} has no launch record"))?;
             let steps = ledger::totals(&session.normalized_path()).steps;
-            return Ok(State::Running(Running {
+            return Ok(State::Running(Box::new(Running {
                 pid: Some(supervisor.pid),
                 launch,
                 steps,
-            }));
+            })));
         }
     }
     if let Some(summary) = ledger::find_summary(home, id)? {
@@ -122,11 +130,11 @@ pub fn state(home: &Path, id: &str) -> Result<State> {
     }
     if let Some(launch) = launch {
         let steps = ledger::totals(&session.normalized_path()).steps;
-        return Ok(State::Running(Running {
+        return Ok(State::Running(Box::new(Running {
             pid: None,
             launch,
             steps,
-        }));
+        })));
     }
     Err(no_session(id))
 }
@@ -252,8 +260,10 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         harness: summary.harness.clone(),
         model: summary.model.clone(),
         effort: summary.effort.clone(),
-        account: summary.profile.clone(),
         harness_session_id: summary.harness_session_id.clone(),
+        mode: summary.mode.clone(),
+        profile: summary.profile.clone(),
+        resumed_from: summary.resumed_from.clone(),
         start: summary.start.clone(),
         end: summary.end.clone(),
         duration_ms: summary.duration_ms,
@@ -285,8 +295,12 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
             .map(|launch| launch.model.clone())
             .unwrap_or_else(|| "unknown".to_string()),
         effort: launch.and_then(|launch| launch.effort.clone()),
-        account: launch.and_then(|launch| launch.account.clone()),
         harness_session_id: None,
+        mode: launch
+            .map(|launch| launch.mode.clone())
+            .unwrap_or_else(default_headless_mode),
+        profile: launch.and_then(|launch| launch.profile.clone()),
+        resumed_from: launch.and_then(|launch| launch.resumed_from.clone()),
         start: iso8601(started),
         end: iso8601(end),
         duration_ms: end.saturating_sub(started) as u64,
@@ -319,8 +333,9 @@ fn append_summary(session: &Session, report: &Report) {
         harness_session_id: report.harness_session_id.clone(),
         model: report.model.clone(),
         effort: report.effort.clone(),
-        profile: report.account.clone(),
-        mode: "headless".to_string(),
+        profile: report.profile.clone(),
+        resumed_from: report.resumed_from.clone(),
+        mode: report.mode.clone(),
         start: report.start.clone(),
         end: report.end.clone(),
         duration_ms: report.duration_ms,

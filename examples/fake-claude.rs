@@ -35,6 +35,7 @@ fn main() -> ExitCode {
             return ExitCode::from(97);
         }
     };
+    let resumed = flag_value(&args, "--resume");
 
     let mut prompt = String::new();
     if let Err(error) = std::io::stdin().read_to_string(&mut prompt) {
@@ -94,11 +95,11 @@ fn main() -> ExitCode {
     let mut transcript_file = if env::var_os(NO_TRANSCRIPT_ENV).is_some() {
         None
     } else {
-        match fs::File::create(&transcript_path) {
+        match open_transcript(&transcript_path, resumed.as_deref()) {
             Ok(file) => Some(file),
             Err(error) => {
-                eprintln!("cannot create the transcript: {error}");
-                return ExitCode::from(97);
+                eprintln!("cannot open the transcript: {error}");
+                return ExitCode::from(1);
             }
         }
     };
@@ -188,6 +189,22 @@ fn append(transcript_file: &mut Option<fs::File>, entry: &str) {
     if let Some(file) = transcript_file {
         let _ = writeln!(file, "{entry}");
         let _ = file.flush();
+    }
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    let position = args.iter().position(|arg| arg == flag)?;
+    args.get(position + 1).cloned()
+}
+
+fn open_transcript(path: &PathBuf, resume: Option<&str>) -> std::io::Result<fs::File> {
+    match resume {
+        Some(id) if !path.is_file() => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no conversation found with session ID: {id}"),
+        )),
+        Some(_) => fs::OpenOptions::new().append(true).open(path),
+        None => fs::File::create(path),
     }
 }
 

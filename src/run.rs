@@ -21,13 +21,30 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 pub struct Launch {
     pub session: Session,
     program: PathBuf,
+    mode: String,
+    profile: Option<String>,
+    resumed_from: Option<String>,
+    from_bytes: u64,
+}
+
+pub struct Continuation {
+    pub parent: String,
+    pub profile: Option<String>,
+    pub from_bytes: u64,
 }
 
 pub fn prepare(harness: &Arc<dyn Harness>, request: &LaunchRequest, home: &Path) -> Result<Launch> {
     let session = Session::plan(home);
     let program = program_of(harness, request, &session)?;
     session.materialize()?;
-    Ok(Launch { session, program })
+    Ok(Launch {
+        session,
+        program,
+        mode: "headless".to_string(),
+        profile: None,
+        resumed_from: None,
+        from_bytes: 0,
+    })
 }
 
 pub fn harness_session_of(session: &Session) -> HarnessSession {
@@ -44,7 +61,46 @@ pub fn adopt(
 ) -> Result<Launch> {
     let program = program_of(harness, request, &session)?;
     session.materialize()?;
-    Ok(Launch { session, program })
+    Ok(Launch {
+        session,
+        program,
+        mode: "headless".to_string(),
+        profile: None,
+        resumed_from: None,
+        from_bytes: 0,
+    })
+}
+
+pub fn resume(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    continuation: &Continuation,
+    home: &Path,
+) -> Result<Launch> {
+    let session = Session::plan(home);
+    let program = program_of(harness, request, &session)?;
+    session.materialize()?;
+    Ok(Launch {
+        session,
+        program,
+        mode: "resume".to_string(),
+        profile: continuation.profile.clone(),
+        resumed_from: Some(continuation.parent.clone()),
+        from_bytes: continuation.from_bytes,
+    })
+}
+
+pub fn transcript_size(
+    harness: &dyn Harness,
+    session: &HarnessSession,
+    harness_session_id: &str,
+    account: Option<&Path>,
+) -> Result<u64> {
+    let path = harness.transcript(session, harness_session_id, account)?;
+    let size = fs::metadata(&path)
+        .with_context(|| format!("reading {}", path.display()))?
+        .len();
+    Ok(size)
 }
 
 fn program_of(
@@ -90,7 +146,15 @@ pub fn headless(
     account: Account<'_>,
     launch: Launch,
 ) -> Result<Report> {
-    let Launch { session, program } = launch;
+    let Launch {
+        session,
+        program,
+        mode,
+        profile,
+        resumed_from,
+        from_bytes,
+    } = launch;
+    let profile = profile.or_else(|| account.name.map(str::to_string));
     let harness_session = harness_session_of(&session);
     let mut command = harness.command(request, &harness_session)?;
     apply_config_dir(&mut command, harness.as_ref(), account.dir);
@@ -104,8 +168,10 @@ pub fn headless(
             effort: request.effort.clone(),
             prompt: request.prompt.clone(),
             cwd: request.cwd.clone(),
-            account: account.name.map(str::to_string),
             started_millis: started_at as u64,
+            mode: mode.clone(),
+            profile: profile.clone(),
+            resumed_from: resumed_from.clone(),
         },
     )?;
     detached::record_supervisor(&session, std::process::id())?;
@@ -164,10 +230,12 @@ pub fn headless(
             harness_id: harness.id().to_string(),
             model: request.model.clone(),
             effort: request.effort.clone(),
-            mode: "headless".to_string(),
-            profile: account.name.map(str::to_string),
+            mode: mode.clone(),
+            profile: profile.clone(),
+            resumed_from: resumed_from.clone(),
         },
         account.dir.map(Path::to_path_buf),
+        from_bytes,
     );
     let stream_path = session.stream_path();
     let mut stream_file = create_private_file(&stream_path)?;
@@ -249,8 +317,9 @@ pub fn headless(
         harness_session_id: harness_session_id.clone(),
         model: request.model.clone(),
         effort: request.effort.clone(),
-        profile: account.name.map(str::to_string),
-        mode: "headless".to_string(),
+        profile,
+        resumed_from: resumed_from.clone(),
+        mode,
         start: iso8601(started_at),
         end: iso8601(now_millis()),
         duration_ms,
@@ -271,8 +340,10 @@ pub fn headless(
         harness: harness.id().to_string(),
         model: request.model.clone(),
         effort: request.effort.clone(),
-        account: account.name.map(str::to_string),
         harness_session_id,
+        mode: summary.mode.clone(),
+        profile: summary.profile.clone(),
+        resumed_from,
         start: summary.start.clone(),
         end: summary.end.clone(),
         duration_ms,
