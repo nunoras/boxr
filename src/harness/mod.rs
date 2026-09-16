@@ -20,6 +20,8 @@ pub struct LaunchRequest {
     pub prompt: String,
     pub cwd: PathBuf,
     pub mode: LaunchMode,
+    pub kind: Option<String>,
+    pub kind_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]

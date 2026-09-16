@@ -14,6 +14,7 @@ mod report;
 mod run;
 mod session;
 mod skill;
+mod stats;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -58,6 +59,9 @@ struct Cli {
 
     #[arg(long, value_name = "NAME")]
     account: Option<String>,
+
+    #[arg(long, value_name = "KIND")]
+    kind: Option<String>,
 
     #[arg(long)]
     detach: bool,
@@ -135,6 +139,13 @@ enum Command {
 
         #[arg(value_name = "PROMPT")]
         prompt: String,
+    },
+    Stats {
+        #[arg(long, value_name = "DIMS")]
+        by: String,
+
+        #[arg(long, value_name = "WINDOW")]
+        since: String,
     },
     #[command(name = "__supervise", hide = true)]
     Supervise {
@@ -243,6 +254,7 @@ fn dispatch() -> Result<i32> {
         Some(Command::Tail { id }) => tail(&id),
         Some(Command::Stop { id }) => stop(&id),
         Some(Command::Resume { id, prompt }) => resume(&id, &prompt),
+        Some(Command::Stats { by, since }) => stats(&home, &by, &since),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
     }
@@ -265,6 +277,7 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
     let model = resolve("model", cli.model, config.defaults.model.clone(), home)?;
     let effort = cli.effort.or(config.defaults.effort.clone());
     let account = cli.account.or(config.defaults.account.clone());
+    let kind = declared_kind(cli.kind.as_deref(), config)?;
 
     let adapter = adapter_for(&harness_id)?;
 
@@ -280,6 +293,8 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         prompt,
         cwd,
         mode: LaunchMode::Fresh,
+        kind,
+        kind_source: cli.kind.map(|_| "declared".to_string()),
     };
 
     if cli.detach {
@@ -323,6 +338,8 @@ fn detach(
             mode: "headless".to_string(),
             profile: account.map(str::to_string),
             resumed_from: None,
+            kind: request.kind.clone(),
+            kind_source: request.kind_source.clone(),
         },
     )?;
     let mut supervisor = match detached::spawn_supervisor(&session) {
@@ -541,6 +558,8 @@ fn supervise(id: &str) -> Result<i32> {
         prompt: launch.prompt,
         cwd: launch.cwd,
         mode: LaunchMode::Fresh,
+        kind: launch.kind,
+        kind_source: launch.kind_source,
     };
     let launch = run::adopt(&adapter, &request, session)?;
     let report = run::headless(
@@ -806,6 +825,8 @@ fn resume(id: &str, prompt: &str) -> Result<i32> {
         prompt: prompt.to_string(),
         cwd: resume_cwd(&home, id)?,
         mode: LaunchMode::Resume { harness_session_id },
+        kind: summary.kind.clone(),
+        kind_source: summary.kind_source.clone(),
     };
     let continuation = run::Continuation {
         parent: id.to_string(),
@@ -880,7 +901,11 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
             summary.effort.as_deref().unwrap_or("harness-default"),
         )
         .field("profile", summary.profile.as_deref().unwrap_or("default"))
-        .field("mode", &summary.mode);
+        .field("mode", &summary.mode)
+        .field("kind", summary.kind.as_deref().unwrap_or("unclassified"));
+    if let Some(source) = &summary.kind_source {
+        toon.field("kindSource", source);
+    }
     if let Some(parent) = &summary.resumed_from {
         toon.field("resumedFrom", parent);
     }
@@ -892,6 +917,39 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
         .number("promptTokens", summary.prompt_tokens)
         .number("completionTokens", summary.completion_tokens)
         .number("cachedTokens", summary.cached_tokens);
+}
+
+fn stats(home: &Path, by: &str, since: &str) -> Result<i32> {
+    print!(
+        "{}",
+        stats::render(home, by, since).map_err(|error| {
+            Fail::usage(
+                format!("{error:#}"),
+                vec!["Run `boxr stats --by model,kind --since 7d`".to_string()],
+            )
+        })?
+    );
+    Ok(EXIT_OK)
+}
+
+fn declared_kind(kind: Option<&str>, config: &Config) -> Result<Option<String>> {
+    let Some(kind) = kind else {
+        return Ok(None);
+    };
+    let core = [
+        "build", "fix", "research", "plan", "review", "chore", "docs",
+    ];
+    if core.contains(&kind) || config.kinds.contains_key(kind) {
+        return Ok(Some(kind.to_string()));
+    }
+    let mut valid: Vec<&str> = core.to_vec();
+    valid.extend(config.kinds.keys().map(String::as_str));
+    valid.sort_unstable();
+    Err(Fail::usage(
+        format!("unknown kind `{kind}`"),
+        vec![format!("Valid kinds: {}", valid.join(", "))],
+    )
+    .into())
 }
 
 fn export(atif: bool, id: &str) -> Result<i32> {

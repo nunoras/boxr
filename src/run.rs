@@ -172,6 +172,8 @@ pub fn headless(
             mode: mode.clone(),
             profile: profile.clone(),
             resumed_from: resumed_from.clone(),
+            kind: request.kind.clone(),
+            kind_source: request.kind_source.clone(),
         },
     )?;
     detached::record_supervisor(&session, std::process::id())?;
@@ -233,6 +235,8 @@ pub fn headless(
             mode: mode.clone(),
             profile: profile.clone(),
             resumed_from: resumed_from.clone(),
+            kind: request.kind.clone(),
+            kind_source: request.kind_source.clone(),
         },
         account.dir.map(Path::to_path_buf),
         from_bytes,
@@ -329,6 +333,8 @@ pub fn headless(
         prompt_tokens: tally.prompt_tokens,
         completion_tokens: tally.completion_tokens,
         cached_tokens: tally.cached_tokens,
+        kind: request.kind.clone(),
+        kind_source: request.kind_source.clone(),
     };
     let mut summary_error = ledger::append_summary(&session.summary_path(), &summary)
         .err()
@@ -356,6 +362,8 @@ pub fn headless(
         capture_error: tally.error,
         summary_error: summary_error.clone(),
         ledger,
+        kind: summary.kind.clone(),
+        kind_source: summary.kind_source.clone(),
     };
     if let Err(error) = report::write(&session.report_path(), &report) {
         summary_error.get_or_insert_with(|| format!("{error:#}"));
