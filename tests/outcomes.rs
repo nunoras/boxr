@@ -131,7 +131,6 @@ fn a_session_in_a_git_repo_records_the_commits_it_made_and_the_files_it_changed(
 
     let summary = summary_of(&harness.boxr_home(), &id);
     let evidence = &summary["git"];
-    assert_eq!(evidence["branch"], "main");
     assert_eq!(evidence["base"], base.as_str());
     assert_eq!(
         evidence["commits"],
@@ -165,7 +164,25 @@ fn a_session_in_a_git_repo_that_made_no_commits_records_empty_evidence() {
     let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
     assert_eq!(summary["git"]["commits"], json!([]));
     assert_eq!(summary["git"]["files"], json!([]));
-    assert_eq!(summary["git"]["branch"], "main");
+}
+
+#[test]
+fn a_session_in_an_unborn_git_repo_records_its_root_commit() {
+    let mut harness = Harness::new();
+    harness.git_init();
+    fs::write(harness.work_dir().join("first.txt"), "first work\n").expect("session file");
+    harness.commit_with("first session commit");
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
+    assert!(summary["git"]["base"].is_null(), "{summary}");
+    assert_eq!(
+        summary["git"]["commits"],
+        json!([harness.git_line(&["rev-parse", "HEAD"])])
+    );
+    assert_eq!(summary["git"]["files"], json!(["first.txt"]));
 }
 
 #[test]

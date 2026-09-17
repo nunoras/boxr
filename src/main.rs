@@ -955,7 +955,6 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     if let Some(evidence) = &summary.git {
         toon.section("git")
             .field("repo", &evidence.repo.display().to_string())
-            .field("branch", evidence.branch.as_deref().unwrap_or("none"))
             .number("commits", evidence.commits.len())
             .number("files", evidence.files.len());
         if let Some(reverted) = &evidence.reverted {

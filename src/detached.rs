@@ -341,12 +341,10 @@ fn interrupted_exit_code() -> i32 {
 }
 
 fn append_summary(session: &Session, report: &Report) {
-    let git = read_launch(session).ok().flatten().and_then(|launch| {
-        launch
-            .git_base
-            .as_deref()
-            .and_then(|base| crate::git::collect(&launch.cwd, base))
-    });
+    let git = read_launch(session)
+        .ok()
+        .flatten()
+        .and_then(|launch| crate::git::collect(&launch.cwd, launch.git_base.as_deref()));
     let summary = Summary {
         id: report.id.clone(),
         harness: report.harness.clone(),

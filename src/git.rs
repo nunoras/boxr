@@ -7,8 +7,7 @@ use std::process::Command;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     pub repo: PathBuf,
-    pub branch: Option<String>,
-    pub base: String,
+    pub base: Option<String>,
     pub commits: Vec<String>,
     pub files: Vec<String>,
     pub reverted: Option<Vec<String>>,
@@ -18,10 +17,18 @@ pub fn head(cwd: &Path) -> Option<String> {
     read(cwd, &["rev-parse", "HEAD"])
 }
 
-pub fn collect(cwd: &Path, base: &str) -> Option<Evidence> {
+pub fn collect(cwd: &Path, base: Option<&str>) -> Option<Evidence> {
     let repo = read(cwd, &["rev-parse", "--show-toplevel"])?;
-    let branch = read(cwd, &["branch", "--show-current"]).filter(|name| !name.is_empty());
-    let range = format!("{base}..HEAD");
+    let Some(exit) = head(cwd) else {
+        return Some(Evidence {
+            repo: PathBuf::from(repo),
+            base: base.map(str::to_string),
+            commits: Vec::new(),
+            files: Vec::new(),
+            reverted: None,
+        });
+    };
+    let range = base.map(|base| format!("{base}..{exit}")).unwrap_or(exit);
     let commits = read(cwd, &["rev-list", &range])?
         .lines()
         .filter(|line| !line.is_empty())
@@ -37,8 +44,7 @@ pub fn collect(cwd: &Path, base: &str) -> Option<Evidence> {
         .collect();
     Some(Evidence {
         repo: PathBuf::from(repo),
-        branch,
-        base: base.to_string(),
+        base: base.map(str::to_string),
         commits,
         files,
         reverted: None,

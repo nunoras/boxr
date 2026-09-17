@@ -337,9 +337,7 @@ pub fn headless(
     let exit_code = exit_code_of(&status);
     let duration_ms = started.elapsed().as_millis() as u64;
     let interrupted = stop.was_requested() || stopped_externally(&status);
-    let git_evidence = git_base
-        .as_deref()
-        .and_then(|base| git::collect(&request.cwd, base));
+    let git_evidence = git::collect(&request.cwd, git_base.as_deref());
     let summary = Summary {
         id: session.id.clone(),
         harness: harness.id().to_string(),
