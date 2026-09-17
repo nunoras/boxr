@@ -740,6 +740,11 @@ fn an_underflowed_priced_component_records_a_calculation_error() {
     assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
     assert!(summary["costError"].is_string(), "{summary}");
 
+    let shown = harness.run(&["show", &session_id_of(&stdout)]);
+    let shown_stdout = stdout_of(&shown);
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr_of(&shown));
+    assert!(shown_stdout.contains("costError:"), "{shown_stdout}");
+
     let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
     let stats_stdout = stdout_of(&stats);
     assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));

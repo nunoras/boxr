@@ -981,6 +981,9 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     if let Some(currency) = &summary.currency {
         toon.field("currency", currency);
     }
+    if let Some(error) = &summary.cost_error {
+        toon.field("costError", &one_line(error, MESSAGE_LIMIT));
+    }
 }
 
 const VERDICTS: &[&str] = &["success", "partial", "failed"];
