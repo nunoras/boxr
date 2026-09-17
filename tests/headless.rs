@@ -655,6 +655,25 @@ fn a_large_finite_price_keeps_the_completed_session() {
 }
 
 #[test]
+fn a_small_finite_price_remains_nonzero() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":1e-8,"output":0.0,"cached":0.0,"reasoning":0.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        summary["apiEquivalentCost"]
+            .as_f64()
+            .is_some_and(|cost| cost > 0.0),
+        "{summary}"
+    );
+}
+
+#[test]
 fn the_configured_currency_sets_the_recorded_currency_and_amount() {
     let harness = Harness::new();
     harness.write_config(SONNET_PRICES);

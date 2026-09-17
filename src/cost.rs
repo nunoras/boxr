@@ -5,7 +5,6 @@ use std::path::Path;
 
 const TOKENS_PER_PRICE_UNIT: f64 = 1_000_000.0;
 const DISPLAY_PLACES: usize = 6;
-const STORED_PLACES: i32 = 9;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Tokens {
@@ -48,7 +47,6 @@ impl CostTable {
             + (tokens.cached as f64 / TOKENS_PER_PRICE_UNIT) * price.cached
             + (non_reasoning_output as f64 / TOKENS_PER_PRICE_UNIT) * price.output
             + (tokens.reasoning as f64 / TOKENS_PER_PRICE_UNIT) * price.reasoning;
-        let amount = round(amount);
         amount.is_finite().then_some(amount)
     }
 }
@@ -69,15 +67,6 @@ pub fn calculate(home: &Path, model: &str, tokens: &Tokens) -> Pricing {
             currency: None,
             error: Some(format!("{error:#}")),
         },
-    }
-}
-
-fn round(value: f64) -> f64 {
-    let places = 10f64.powi(STORED_PLACES);
-    if value.abs() > f64::MAX / places {
-        value
-    } else {
-        (value * places).round() / places
     }
 }
 
