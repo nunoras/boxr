@@ -455,10 +455,22 @@ pub struct SummaryUpdate {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "verdictNote")]
-    pub verdict_note: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "verdictNote",
+        deserialize_with = "double_option"
+    )]
+    pub verdict_note: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<crate::git::Evidence>,
+}
+
+fn double_option<'de, D>(deserializer: D) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 impl SummaryUpdate {
@@ -467,7 +479,7 @@ impl SummaryUpdate {
             summary.verdict = Some(verdict);
         }
         if let Some(verdict_note) = self.verdict_note {
-            summary.verdict_note = Some(verdict_note);
+            summary.verdict_note = verdict_note;
         }
         if let Some(git) = self.git {
             summary.git = Some(git);

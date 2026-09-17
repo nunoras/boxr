@@ -211,7 +211,7 @@ fn outcome_records_the_caller_verdict_and_note() {
 }
 
 #[test]
-fn outcome_overwrites_an_earlier_verdict_and_keeps_an_absent_note() {
+fn outcome_overwrites_an_earlier_verdict_and_clears_an_absent_note() {
     let harness = Harness::new();
     let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
     let id = session_id_of(&stdout_of(&launched));
@@ -219,11 +219,33 @@ fn outcome_overwrites_an_earlier_verdict_and_keeps_an_absent_note() {
     let first = harness.run(&["outcome", &id, "success", "--note", "shipped it"]);
     assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
     let second = harness.run(&["outcome", &id, "partial"]);
+    let second_stdout = stdout_of(&second);
     assert_eq!(second.status.code(), Some(0), "{}", stderr_of(&second));
+    assert!(!second_stdout.contains("shipped it"), "{second_stdout}");
 
     let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["verdict"], "partial");
-    assert_eq!(summary["verdictNote"], "shipped it");
+    assert!(summary["verdictNote"].is_null(), "{summary}");
+
+    let show = harness.run(&["show", &id]);
+    let shown = stdout_of(&show);
+    assert_eq!(show.status.code(), Some(0), "{}", stderr_of(&show));
+    assert!(shown.contains("verdict: partial"), "{shown}");
+    assert!(!shown.contains("shipped it"), "{shown}");
+
+    let records: Vec<serde_json::Value> =
+        fs::read_to_string(harness.boxr_home().join("summary.jsonl"))
+            .expect("summary ledger")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a summary record"))
+            .collect();
+    assert!(
+        records
+            .iter()
+            .any(|record| record["verdict"] == json!("success")
+                && record["verdictNote"] == json!("shipped it")),
+        "{records:?}"
+    );
 }
 
 #[test]

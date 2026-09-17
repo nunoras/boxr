@@ -1015,17 +1015,17 @@ fn outcome(
         )
         .into());
     }
-    let summary = ledger::read_summary(&home, &id).map_err(|error| {
+    ledger::read_summary(&home, &id).map_err(|error| {
         Fail::usage(
             format!("{error:#}"),
             vec!["Run `boxr show <id>` with an id printed by a boxr launch".to_string()],
         )
     })?;
-    let displayed_note = note.clone().or_else(|| summary.verdict_note.clone());
+    let displayed_note = note.clone();
     let update = SummaryUpdate {
         id: id.clone(),
         verdict: Some(verdict.clone()),
-        verdict_note: note,
+        verdict_note: Some(note),
         git: None,
     };
     ledger::append_summary_update(&home.join(ledger::SUMMARY_FILE), &update).map_err(|error| {
