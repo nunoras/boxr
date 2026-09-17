@@ -1,5 +1,5 @@
 use crate::clock::{iso8601, now_millis};
-use crate::cost::{self, Pricing};
+use crate::cost;
 use crate::fail::Fail;
 use crate::home::restrict_file;
 use crate::ledger::{self, Summary};
@@ -103,18 +103,7 @@ pub fn abandon_detach(session: &Session, supervisor: Option<Child>) {
         let _ = child.wait();
     }
     let launch = read_launch(session).ok().flatten();
-    let report = interrupted(
-        session,
-        launch.as_ref(),
-        &cost::calculate(
-            &session.home,
-            launch
-                .as_ref()
-                .map(|launch| launch.model.as_str())
-                .unwrap_or("unknown"),
-            &totals(session),
-        ),
-    );
+    let report = interrupted(session, launch.as_ref());
     let _ = report::write(&session.report_path(), &report);
     append_summary(session, &report);
 }
@@ -142,18 +131,7 @@ pub fn state(home: &Path, id: &str) -> Result<State> {
         return Ok(State::Finished(Box::new(report)));
     }
     if supervisor.is_some() {
-        let report = interrupted(
-            &session,
-            launch.as_ref(),
-            &cost::calculate(
-                home,
-                launch
-                    .as_ref()
-                    .map(|launch| launch.model.as_str())
-                    .unwrap_or("unknown"),
-                &totals(&session),
-            ),
-        );
+        let report = interrupted(&session, launch.as_ref());
         append_summary(&session, &report);
         return Ok(State::Finished(Box::new(report)));
     }
@@ -317,17 +295,7 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
     })
 }
 
-fn totals(session: &Session) -> cost::Tokens {
-    let totals = ledger::totals(&session.normalized_path());
-    cost::Tokens {
-        prompt: totals.prompt_tokens,
-        completion: totals.completion_tokens,
-        cached: totals.cached_tokens,
-        reasoning: totals.reasoning_tokens,
-    }
-}
-
-fn interrupted(session: &Session, launch: Option<&LaunchFile>, pricing: &Pricing) -> Report {
+fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
     let totals = ledger::totals(&session.normalized_path());
     let end = now_millis();
     let started = launch
@@ -336,6 +304,16 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>, pricing: &Pricing
     let model = launch
         .map(|launch| launch.model.clone())
         .unwrap_or_else(|| "unknown".to_string());
+    let pricing = cost::calculate(
+        &session.home,
+        &model,
+        &cost::Tokens {
+            prompt: totals.prompt_tokens,
+            completion: totals.completion_tokens,
+            cached: totals.cached_tokens,
+            reasoning: totals.reasoning_tokens,
+        },
+    );
     Report {
         id: session.id.clone(),
         status: "interrupted".to_string(),

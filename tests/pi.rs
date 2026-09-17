@@ -275,7 +275,7 @@ fn a_pi_session_prices_its_reasoning_tokens_from_the_price_table() {
     fs::create_dir_all(&home).expect("boxr home");
     fs::write(
         home.join("config.json"),
-        r#"{"currency":"USD","prices":{"xai/grok-4.5":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":6.0}}}"#,
+        r#"{"currency":"USD","prices":{"xai/grok-4.5":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}"#,
     )
     .expect("config");
 
@@ -294,7 +294,7 @@ fn a_pi_session_prices_its_reasoning_tokens_from_the_price_table() {
     let cost = summary["apiEquivalentCost"]
         .as_f64()
         .expect("a recorded cost");
-    assert!((cost - 0.016_999_2).abs() < 1e-9, "{cost}");
+    assert!((cost - 0.017_755_2).abs() < 1e-9, "{cost}");
 }
 
 #[test]
