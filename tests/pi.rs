@@ -254,6 +254,7 @@ fn pi_transcripts_normalize_into_atif_steps_with_token_counts() {
     assert_eq!(closing["total_prompt_tokens"], 8769);
     assert_eq!(closing["total_completion_tokens"], 19);
     assert_eq!(closing["total_cached_tokens"], 384);
+    assert_eq!(closing["extra"]["total_reasoning_tokens"], 14);
 
     let summary = summary_of(&pi.boxr_home(), &session_id_of(&stdout));
     assert_eq!(summary["harness"], "pi");
@@ -264,6 +265,36 @@ fn pi_transcripts_normalize_into_atif_steps_with_token_counts() {
     assert_eq!(summary["promptTokens"], 8769);
     assert_eq!(summary["completionTokens"], 19);
     assert_eq!(summary["cachedTokens"], 384);
+    assert_eq!(summary["reasoningTokens"], 14);
+}
+
+#[test]
+fn a_pi_session_prices_its_reasoning_tokens_from_the_price_table() {
+    let pi = Pi::new();
+    let home = pi.boxr_home();
+    fs::create_dir_all(&home).expect("boxr home");
+    fs::write(
+        home.join("config.json"),
+        r#"{"currency":"USD","prices":{"xai/grok-4.5":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":6.0}}}"#,
+    )
+    .expect("config");
+
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+
+    let summary = summary_of(&home, &session_id_of(&stdout));
+    assert_eq!(summary["reasoningTokens"], 14);
+    assert_eq!(summary["currency"], "USD");
+    let cost = summary["apiEquivalentCost"]
+        .as_f64()
+        .expect("a recorded cost");
+    assert!((cost - 0.016_999_2).abs() < 1e-9, "{cost}");
 }
 
 #[test]

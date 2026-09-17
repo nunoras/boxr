@@ -16,6 +16,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - A session's outcome signals stay separate fields rather than one rolled-up status; git evidence (`src/git.rs`) is the commits reachable from the exit `HEAD` that the launch `HEAD` did not reach, with its over-counting limits documented in "Outcomes" in `docs/design.md`, and `--check-reverted` marks a commit reverted only when no local branch contains it.
 - The normalized ledger targets ATIF v1.8 (`src/atif.rs`); the schema is the Harbor RFC at https://www.harborframework.com/docs/agents/trajectory-format.
 - Account profiles live at `accounts/<harness>/<name>` under the boxr home (`src/account.rs`). boxr only ever sets the config-dir override and never touches the user's own harness config.
+- API-equivalent cost is estimated per session from `currency` and `prices` in config (`src/cost.rs`), recorded in the summary as `apiEquivalentCost` plus `currency`, and summed by `boxr stats`; a model missing from the table records null, never zero, and stats counts those as `unpricedSessions`.
 - Output is axi-style TOON on stdout with `help[]` next-step lines; exit codes are defined in `src/fail.rs`.
 - No comments in code, per the repo's coding standard.
 

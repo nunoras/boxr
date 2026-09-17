@@ -1,0 +1,69 @@
+use crate::config::{Config, Currency, Price};
+use anyhow::Result;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+const TOKENS_PER_PRICE_UNIT: f64 = 1_000_000.0;
+const DISPLAY_PLACES: usize = 6;
+const STORED_PLACES: i32 = 9;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Tokens {
+    pub prompt: u64,
+    pub completion: u64,
+    pub cached: u64,
+    pub reasoning: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct CostTable {
+    currency: Currency,
+    prices: BTreeMap<String, Price>,
+}
+
+impl CostTable {
+    pub fn new(config: &Config) -> CostTable {
+        CostTable {
+            currency: config.currency,
+            prices: config.prices.clone(),
+        }
+    }
+
+    pub fn currency(&self) -> &'static str {
+        self.currency.code()
+    }
+
+    pub fn cost_of(&self, model: &str, tokens: &Tokens) -> Option<f64> {
+        let price = self.prices.get(model)?;
+        let uncached_input = tokens.prompt.saturating_sub(tokens.cached);
+        let non_reasoning_output = tokens.completion.saturating_sub(tokens.reasoning);
+        let amount = uncached_input as f64 * price.input
+            + tokens.cached as f64 * price.cached
+            + non_reasoning_output as f64 * price.output
+            + tokens.reasoning as f64 * price.reasoning;
+        Some(round(amount / TOKENS_PER_PRICE_UNIT))
+    }
+}
+
+pub fn table(home: &Path) -> Result<CostTable> {
+    Ok(CostTable::new(&Config::load(home)?))
+}
+
+fn round(value: f64) -> f64 {
+    let places = 10f64.powi(STORED_PLACES);
+    (value * places).round() / places
+}
+
+pub fn render(cost: Option<f64>) -> String {
+    cost.map(amount).unwrap_or_else(|| "unknown".to_string())
+}
+
+fn amount(value: f64) -> String {
+    let fixed = format!("{value:.DISPLAY_PLACES$}");
+    let Some((whole, fraction)) = fixed.split_once('.') else {
+        return fixed;
+    };
+    let trimmed = fraction.trim_end_matches('0');
+    let fraction = format!("{trimmed:0<2}");
+    format!("{whole}.{fraction}")
+}

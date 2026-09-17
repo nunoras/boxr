@@ -1,6 +1,6 @@
 use crate::atif::{
-    Agent, Closing, FinalMetrics, Header, Observation, ObservationResult, Step, Trajectory,
-    SCHEMA_VERSION,
+    Agent, Closing, FinalMetrics, Header, Metrics, Observation, ObservationResult, Step,
+    Trajectory, SCHEMA_VERSION,
 };
 use crate::harness::{Harness, HarnessSession, TranscriptEntry};
 use crate::home::restrict_file;
@@ -48,6 +48,7 @@ pub struct Tally {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cached_tokens: u64,
+    pub reasoning_tokens: u64,
     pub error: Option<String>,
 }
 
@@ -220,6 +221,7 @@ impl Normalizer<'_> {
             self.tally.prompt_tokens += metrics.prompt_tokens.unwrap_or(0);
             self.tally.completion_tokens += metrics.completion_tokens.unwrap_or(0);
             self.tally.cached_tokens += metrics.cached_tokens.unwrap_or(0);
+            self.tally.reasoning_tokens += reasoning_tokens(metrics);
         }
         self.write(&step)
     }
@@ -378,6 +380,12 @@ fn closing(tally: &Tally) -> Closing {
     if let Some(error) = &tally.error {
         extra.insert("captureError".to_string(), Value::from(error.clone()));
     }
+    if tally.reasoning_tokens > 0 {
+        extra.insert(
+            "total_reasoning_tokens".to_string(),
+            Value::from(tally.reasoning_tokens),
+        );
+    }
     Closing {
         final_metrics: FinalMetrics {
             total_prompt_tokens: tally.prompt_tokens,
@@ -388,6 +396,23 @@ fn closing(tally: &Tally) -> Closing {
             extra,
         },
     }
+}
+
+fn reasoning_tokens(metrics: &Metrics) -> u64 {
+    metrics
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.get("reasoning_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn total_reasoning_tokens(metrics: &FinalMetrics) -> u64 {
+    metrics
+        .extra
+        .get("total_reasoning_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
 }
 
 fn write_line(file: &mut File, path: &Path, value: &impl Serialize) -> Result<()> {
@@ -448,6 +473,12 @@ pub struct Summary {
     pub verdict_note: Option<String>,
     #[serde(default)]
     pub git: Option<crate::git::Evidence>,
+    #[serde(default, rename = "reasoningTokens")]
+    pub reasoning_tokens: u64,
+    #[serde(default, rename = "apiEquivalentCost")]
+    pub api_equivalent_cost: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -560,6 +591,7 @@ pub fn totals(normalized: &Path) -> Tally {
                     prompt_tokens: metrics.total_prompt_tokens,
                     completion_tokens: metrics.total_completion_tokens,
                     cached_tokens: metrics.total_cached_tokens,
+                    reasoning_tokens: total_reasoning_tokens(&metrics),
                     error: None,
                 })
                 .unwrap_or(tally);
@@ -579,6 +611,11 @@ pub fn totals(normalized: &Path) -> Tally {
                 .unwrap_or(0);
             tally.cached_tokens += metrics
                 .get("cached_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            tally.reasoning_tokens += metrics
+                .get("extra")
+                .and_then(|extra| extra.get("reasoning_tokens"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
         }

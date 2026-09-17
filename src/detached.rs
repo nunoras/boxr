@@ -1,4 +1,5 @@
 use crate::clock::{iso8601, now_millis};
+use crate::cost::{self, CostTable};
 use crate::fail::Fail;
 use crate::home::restrict_file;
 use crate::ledger::{self, Summary};
@@ -102,7 +103,8 @@ pub fn abandon_detach(session: &Session, supervisor: Option<Child>) {
         let _ = child.wait();
     }
     let launch = read_launch(session).ok().flatten();
-    let report = interrupted(session, launch.as_ref());
+    let prices = cost::table(&session.home).unwrap_or_default();
+    let report = interrupted(session, launch.as_ref(), &prices);
     let _ = report::write(&session.report_path(), &report);
     append_summary(session, &report);
 }
@@ -130,7 +132,7 @@ pub fn state(home: &Path, id: &str) -> Result<State> {
         return Ok(State::Finished(Box::new(report)));
     }
     if supervisor.is_some() {
-        let report = interrupted(&session, launch.as_ref());
+        let report = interrupted(&session, launch.as_ref(), &cost::table(home)?);
         append_summary(&session, &report);
         return Ok(State::Finished(Box::new(report)));
     }
@@ -281,6 +283,9 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         prompt_tokens: summary.prompt_tokens,
         completion_tokens: summary.completion_tokens,
         cached_tokens: summary.cached_tokens,
+        reasoning_tokens: summary.reasoning_tokens,
+        api_equivalent_cost: summary.api_equivalent_cost,
+        currency: summary.currency.clone(),
         capture_error: None,
         summary_error: None,
         error: summary.error.clone(),
@@ -290,21 +295,31 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
     })
 }
 
-fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
+fn interrupted(session: &Session, launch: Option<&LaunchFile>, prices: &CostTable) -> Report {
     let totals = ledger::totals(&session.normalized_path());
     let end = now_millis();
     let started = launch
         .map(|launch| launch.started_millis as u128)
         .unwrap_or(end);
+    let model = launch
+        .map(|launch| launch.model.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let api_equivalent_cost = prices.cost_of(
+        &model,
+        &cost::Tokens {
+            prompt: totals.prompt_tokens,
+            completion: totals.completion_tokens,
+            cached: totals.cached_tokens,
+            reasoning: totals.reasoning_tokens,
+        },
+    );
     Report {
         id: session.id.clone(),
         status: "interrupted".to_string(),
         harness: launch
             .map(|launch| launch.harness.clone())
             .unwrap_or_else(|| "unknown".to_string()),
-        model: launch
-            .map(|launch| launch.model.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
+        model,
         effort: launch.and_then(|launch| launch.effort.clone()),
         harness_session_id: None,
         mode: launch
@@ -323,6 +338,9 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         prompt_tokens: totals.prompt_tokens,
         completion_tokens: totals.completion_tokens,
         cached_tokens: totals.cached_tokens,
+        reasoning_tokens: totals.reasoning_tokens,
+        api_equivalent_cost,
+        currency: Some(prices.currency().to_string()),
         capture_error: totals.error,
         summary_error: None,
         error: None,
@@ -365,6 +383,9 @@ fn append_summary(session: &Session, report: &Report) {
         prompt_tokens: report.prompt_tokens,
         completion_tokens: report.completion_tokens,
         cached_tokens: report.cached_tokens,
+        reasoning_tokens: report.reasoning_tokens,
+        api_equivalent_cost: report.api_equivalent_cost,
+        currency: report.currency.clone(),
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
         interrupted: report.interrupted,

@@ -2,6 +2,7 @@ mod account;
 mod atif;
 mod clock;
 mod config;
+mod cost;
 mod detached;
 mod fail;
 mod git;
@@ -971,7 +972,15 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
         .number("steps", summary.steps)
         .number("promptTokens", summary.prompt_tokens)
         .number("completionTokens", summary.completion_tokens)
-        .number("cachedTokens", summary.cached_tokens);
+        .number("cachedTokens", summary.cached_tokens)
+        .number("reasoningTokens", summary.reasoning_tokens)
+        .number(
+            "apiEquivalentCost",
+            cost::render(summary.api_equivalent_cost),
+        );
+    if let Some(currency) = &summary.currency {
+        toon.field("currency", currency);
+    }
 }
 
 const VERDICTS: &[&str] = &["success", "partial", "failed"];

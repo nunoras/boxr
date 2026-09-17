@@ -176,13 +176,19 @@ A revert check marks a recorded commit reverted only when no local branch contai
 Three measures, each labeled:
 
 - Raw tokens: input, output, cached, reasoning. Ground truth.
-- API-equivalent cost: tokens times list price from a config price table, in USD or EUR (configurable). The common currency for comparing models.
+- API-equivalent cost: tokens times list price, the estimate that makes models comparable.
+  The list prices come from `prices` in config, keyed by model, in the currency `currency` sets (`USD` or `EUR`), per million tokens for `input`, `output`, `cached` and `reasoning`.
+  Cached input and reasoning tokens are subtotals of the prompt and completion counts the harness reports, so they are priced at their own rate and the rest at the input and output rates: `(prompt - cached) * input + cached * cached + (completion - reasoning) * output + reasoning * reasoning`.
+  A model with no entry in the table records `apiEquivalentCost` as null rather than zero, so an unpriced session is never read as a free one.
+  Prices are arithmetic on the table and nothing else; boxr never fetches a price.
 - Quota share: the percentage of a subscription window consumed, from quota readings before and after, split by token share when sessions overlap. Always marked estimated.
 
 ## Stats
 
 `boxr stats` is the only source of numbers, for example `boxr stats --by model,kind --since 7d`.
-Any visual view (a Lavish report, a later dashboard) is built on its output rather than querying the ledger itself.
+Each row carries the requested dimensions, the `currency` the cost is in, `sessions`, `tokens`, `durationMs`, the summed `apiEquivalentCost` and `unpricedSessions`, the count of sessions in that group whose model had no price.
+Cost is grouped by currency as well, because adding amounts from different currencies would mean nothing.
+Every visual view (a Lavish report, a later dashboard) is built on its output rather than querying the ledger itself.
 Queries run on DuckDB reading the JSONL directly.
 A cached DuckDB or Parquet file is added only when a measured need shows up.
 

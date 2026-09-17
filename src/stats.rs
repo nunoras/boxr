@@ -1,4 +1,5 @@
 use crate::clock;
+use crate::cost;
 use crate::output::{Kind, Toon};
 use anyhow::{anyhow, Context, Result};
 use duckdb::Connection;
@@ -17,7 +18,9 @@ const DIMENSIONS: &[&str] = &[
     "limitHit",
 ];
 
-const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT'}";
+const UNKNOWN_CURRENCY: &str = "unknown";
+
+const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT','apiEquivalentCost':'DOUBLE','currency':'VARCHAR'}";
 
 const SUMMARY_COLUMNS: &[&str] = &[
     "model",
@@ -34,6 +37,8 @@ const SUMMARY_COLUMNS: &[&str] = &[
     "completionTokens",
     "cachedTokens",
     "durationMs",
+    "apiEquivalentCost",
+    "currency",
 ];
 
 pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
@@ -42,11 +47,24 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
     let cutoff = clock::iso8601(clock::now_millis().saturating_sub(window.as_millis()));
     let path = home.join(crate::ledger::SUMMARY_FILE);
     let mut columns = dimensions.clone();
-    columns.extend(["sessions", "tokens", "durationMs"]);
+    columns.extend([
+        "currency",
+        "sessions",
+        "tokens",
+        "durationMs",
+        "apiEquivalentCost",
+        "unpricedSessions",
+    ]);
     let kinds = columns
         .iter()
         .map(|column| match *column {
-            "interrupted" | "limitHit" | "sessions" | "tokens" | "durationMs" => Kind::Number,
+            "interrupted"
+            | "limitHit"
+            | "sessions"
+            | "tokens"
+            | "durationMs"
+            | "apiEquivalentCost"
+            | "unpricedSessions" => Kind::Number,
             _ => Kind::Text,
         })
         .collect::<Vec<_>>();
@@ -73,9 +91,14 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
         for index in 0..dimensions.len() {
             value.push(row.get::<_, Option<String>>(index)?.unwrap_or_default());
         }
-        value.push(row.get::<_, i64>(dimensions.len())?.to_string());
+        value.push(row.get::<_, String>(dimensions.len())?);
         value.push(row.get::<_, i64>(dimensions.len() + 1)?.to_string());
         value.push(row.get::<_, i64>(dimensions.len() + 2)?.to_string());
+        value.push(row.get::<_, i64>(dimensions.len() + 3)?.to_string());
+        value.push(cost::render(
+            row.get::<_, Option<f64>>(dimensions.len() + 4)?,
+        ));
+        value.push(row.get::<_, i64>(dimensions.len() + 5)?.to_string());
         values.push(value);
     }
     let mut toon = Toon::new();
@@ -141,7 +164,7 @@ fn query(dimensions: &[&str]) -> String {
         .iter()
         .map(|dimension| field(dimension))
         .collect();
-    let groups = (1..=dimensions.len())
+    let groups = (1..=dimensions.len() + 1)
         .map(|index| index.to_string())
         .collect::<Vec<_>>()
         .join(", ");
@@ -154,7 +177,7 @@ fn query(dimensions: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), summaries AS (SELECT id, {summaries} FROM entries GROUP BY id) SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM summaries WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
+        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), summaries AS (SELECT id, {summaries} FROM entries GROUP BY id) SELECT {}, COALESCE(currency, '{UNKNOWN_CURRENCY}') AS currency, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT, SUM(apiEquivalentCost), COUNT(*) FILTER (WHERE apiEquivalentCost IS NULL)::BIGINT FROM summaries WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
         fields.join(", "),
         groups,
         groups
