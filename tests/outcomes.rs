@@ -152,6 +152,28 @@ fn a_session_in_a_git_repo_records_the_commits_it_made_and_the_files_it_changed(
 }
 
 #[test]
+fn a_session_records_a_commit_reset_before_exit() {
+    let mut harness = Harness::new();
+    harness.git_init();
+    fs::write(harness.work_dir().join("notes.txt"), "baseline\n").expect("baseline file");
+    harness.git(&["add", "-A"]);
+    harness.git(&["commit", "-q", "-m", "baseline"]);
+    let base = harness.git_line(&["rev-parse", "HEAD"]);
+    fs::write(harness.work_dir().join("more.txt"), "session work\n").expect("session file");
+    harness.commit_with("session work by the fake harness");
+    harness.reset_after_commit();
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let evidence = &summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)))["git"];
+    let commits = evidence["commits"].as_array().expect("recorded commits");
+    assert_eq!(commits.len(), 1, "{evidence}");
+    assert_ne!(commits[0], json!(base), "{evidence}");
+    assert_eq!(evidence["files"], json!(["more.txt"]));
+}
+
+#[test]
 fn a_session_in_a_git_repo_that_made_no_commits_records_empty_evidence() {
     let harness = Harness::new();
     harness.git_init();

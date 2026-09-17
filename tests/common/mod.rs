@@ -20,6 +20,7 @@ pub struct Harness {
     hang_after: Option<String>,
     fixture: &'static str,
     commit: Option<String>,
+    reset_after_commit: bool,
 }
 
 impl Harness {
@@ -42,6 +43,7 @@ impl Harness {
             hang_after: None,
             fixture: "hello",
             commit: None,
+            reset_after_commit: false,
         }
     }
 
@@ -140,6 +142,10 @@ impl Harness {
 
     pub fn commit_with(&mut self, message: &str) {
         self.commit = Some(message.to_string());
+    }
+
+    pub fn reset_after_commit(&mut self) {
+        self.reset_after_commit = true;
     }
 
     pub fn work_dir(&self) -> PathBuf {
@@ -258,6 +264,9 @@ impl Harness {
                 .env("BOXR_FAKE_CLAUDE_COMMIT", message)
                 .env("BOXR_FAKE_CLAUDE_GIT", git_exe());
         }
+        if self.reset_after_commit {
+            command.env("BOXR_FAKE_CLAUDE_RESET", "1");
+        }
         command
     }
 }
@@ -370,7 +379,8 @@ pub fn summary_of(home: &Path, id: &str) -> Value {
         .expect("summary ledger")
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("a json line"))
-        .find(|value| value["id"] == id)
+        .filter(|value| value["id"] == id)
+        .last()
         .expect("a summary line for the session")
 }
 

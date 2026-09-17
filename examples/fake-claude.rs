@@ -16,6 +16,7 @@ const HANG_AFTER_ENV: &str = "BOXR_FAKE_CLAUDE_HANG_AFTER";
 const PID_ENV: &str = "BOXR_FAKE_CLAUDE_PID";
 const CONFIG_OUT_ENV: &str = "BOXR_FAKE_CLAUDE_CONFIG_OUT";
 const COMMIT_ENV: &str = "BOXR_FAKE_CLAUDE_COMMIT";
+const RESET_ENV: &str = "BOXR_FAKE_CLAUDE_RESET";
 const GIT_ENV: &str = "BOXR_FAKE_CLAUDE_GIT";
 
 fn main() -> ExitCode {
@@ -112,6 +113,12 @@ fn main() -> ExitCode {
             return ExitCode::from(97);
         }
     }
+    if env::var_os(RESET_ENV).is_some() {
+        if let Err(error) = reset() {
+            eprintln!("cannot reset: {error}");
+            return ExitCode::from(97);
+        }
+    }
 
     let hang_after = env::var(HANG_AFTER_ENV)
         .ok()
@@ -144,12 +151,21 @@ fn main() -> ExitCode {
 }
 
 fn commit(message: &std::ffi::OsStr) -> std::io::Result<()> {
-    let git = env::var_os(GIT_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("git"));
+    let git = git();
     run_git(&git, &["add", "-A"])?;
     let message = message.to_string_lossy();
     run_git(&git, &["commit", "-m", message.as_ref()])
+}
+
+fn reset() -> std::io::Result<()> {
+    let git = git();
+    run_git(&git, &["reset", "--hard", "HEAD~"])
+}
+
+fn git() -> PathBuf {
+    env::var_os(GIT_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("git"))
 }
 
 fn run_git(git: &PathBuf, args: &[&str]) -> std::io::Result<()> {
