@@ -20,7 +20,7 @@ const DIMENSIONS: &[&str] = &[
 
 const UNKNOWN_CURRENCY: &str = "unknown";
 
-const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT','apiEquivalentCost':'DOUBLE','currency':'VARCHAR'}";
+const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT','apiEquivalentCost':'DOUBLE','currency':'VARCHAR','costError':'VARCHAR'}";
 
 const SUMMARY_COLUMNS: &[&str] = &[
     "model",
@@ -39,6 +39,7 @@ const SUMMARY_COLUMNS: &[&str] = &[
     "durationMs",
     "apiEquivalentCost",
     "currency",
+    "costError",
 ];
 
 pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
@@ -177,7 +178,7 @@ fn query(dimensions: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), summaries AS (SELECT id, {summaries} FROM entries GROUP BY id) SELECT {}, COALESCE(currency, '{UNKNOWN_CURRENCY}') AS currency, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT, SUM(apiEquivalentCost), COUNT(*) FILTER (WHERE apiEquivalentCost IS NULL)::BIGINT FROM summaries WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
+        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), summaries AS (SELECT id, {summaries} FROM entries GROUP BY id) SELECT {}, COALESCE(currency, '{UNKNOWN_CURRENCY}') AS currency, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT, SUM(apiEquivalentCost), COUNT(*) FILTER (WHERE apiEquivalentCost IS NULL AND costError IS NULL)::BIGINT FROM summaries WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
         fields.join(", "),
         groups,
         groups

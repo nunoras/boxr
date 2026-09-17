@@ -719,6 +719,44 @@ fn the_configured_currency_sets_the_recorded_currency_and_amount() {
 }
 
 #[test]
+fn a_cost_calculation_error_is_not_counted_as_unpriced() {
+    let harness = Harness::new();
+    write_summary_line(
+        &harness,
+        json!({
+            "id": "s-overflow",
+            "harness": "claude",
+            "model": "sonnet",
+            "effort": "high",
+            "profile": "work",
+            "mode": "headless",
+            "kind": "build",
+            "start": "2099-01-01T00:00:00.000Z",
+            "end": "2099-01-01T00:00:00.004Z",
+            "durationMs": 4,
+            "status": "ok",
+            "exitCode": 0,
+            "steps": 1,
+            "promptTokens": 1,
+            "completionTokens": 2,
+            "cachedTokens": 3,
+            "apiEquivalentCost": null,
+            "currency": "USD",
+            "costError": "calculating API-equivalent cost for sonnet produced a non-finite amount"
+        }),
+    );
+
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        stdout.contains("sonnet,build,USD,1,6,4,unknown,0"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn an_unpriced_model_records_an_unknown_cost() {
     let harness = Harness::new();
     harness.write_config(

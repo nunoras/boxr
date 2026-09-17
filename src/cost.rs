@@ -39,15 +39,20 @@ impl CostTable {
         self.currency.code()
     }
 
-    pub fn cost_of(&self, model: &str, tokens: &Tokens) -> Option<f64> {
-        let price = self.prices.get(model)?;
+    pub fn cost_of(&self, model: &str, tokens: &Tokens) -> Result<Option<f64>> {
+        let Some(price) = self.prices.get(model) else {
+            return Ok(None);
+        };
         let uncached_input = tokens.prompt.saturating_sub(tokens.cached);
         let non_reasoning_output = tokens.completion.saturating_sub(tokens.reasoning);
         let amount = (uncached_input as f64 / TOKENS_PER_PRICE_UNIT) * price.input
             + (tokens.cached as f64 / TOKENS_PER_PRICE_UNIT) * price.cached
             + (non_reasoning_output as f64 / TOKENS_PER_PRICE_UNIT) * price.output
             + (tokens.reasoning as f64 / TOKENS_PER_PRICE_UNIT) * price.reasoning;
-        amount.is_finite().then_some(amount)
+        if !amount.is_finite() {
+            anyhow::bail!("calculating API-equivalent cost for {model} produced a non-finite amount");
+        }
+        Ok(Some(amount))
     }
 }
 
@@ -57,10 +62,17 @@ pub fn table(home: &Path) -> Result<CostTable> {
 
 pub fn calculate(home: &Path, model: &str, tokens: &Tokens) -> Pricing {
     match table(home) {
-        Ok(table) => Pricing {
-            api_equivalent_cost: table.cost_of(model, tokens),
-            currency: Some(table.currency().to_string()),
-            error: None,
+        Ok(table) => match table.cost_of(model, tokens) {
+            Ok(api_equivalent_cost) => Pricing {
+                api_equivalent_cost,
+                currency: Some(table.currency().to_string()),
+                error: None,
+            },
+            Err(error) => Pricing {
+                api_equivalent_cost: None,
+                currency: Some(table.currency().to_string()),
+                error: Some(format!("{error:#}")),
+            },
         },
         Err(error) => Pricing {
             api_equivalent_cost: None,
