@@ -456,6 +456,31 @@ fn stats_groups_the_summary_ledger_by_model_and_kind() {
 }
 
 #[test]
+fn stats_rejects_a_non_finite_cost_total() {
+    let harness = Harness::new();
+    write_summary_fixture(
+        &harness,
+        0,
+        SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(1e308)),
+    );
+    write_summary_fixture(
+        &harness,
+        1,
+        SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(1e308)),
+    );
+
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+
+    assert_ne!(output.status.code(), Some(0), "{}", stdout_of(&output));
+    assert!(
+        stderr_of(&output)
+            .contains("calculating API-equivalent cost total produced a non-finite amount"),
+        "{}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
 fn stats_counts_a_summary_written_before_costs_as_unpriced() {
     let harness = Harness::new();
     write_summary_line(

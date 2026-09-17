@@ -96,9 +96,13 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
         value.push(row.get::<_, i64>(dimensions.len() + 1)?.to_string());
         value.push(row.get::<_, i64>(dimensions.len() + 2)?.to_string());
         value.push(row.get::<_, i64>(dimensions.len() + 3)?.to_string());
-        value.push(cost::render(
-            row.get::<_, Option<f64>>(dimensions.len() + 4)?,
-        ));
+        let api_equivalent_cost = row.get::<_, Option<f64>>(dimensions.len() + 4)?;
+        if api_equivalent_cost.is_some_and(|amount| !amount.is_finite()) {
+            return Err(anyhow!(
+                "calculating API-equivalent cost total produced a non-finite amount"
+            ));
+        }
+        value.push(cost::render(api_equivalent_cost));
         value.push(row.get::<_, i64>(dimensions.len() + 5)?.to_string());
         values.push(value);
     }
