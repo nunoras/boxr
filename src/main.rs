@@ -23,7 +23,7 @@ use config::Config;
 use detached::{LaunchFile, State};
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
-use ledger::Summary;
+use ledger::{Summary, SummaryUpdate};
 use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
@@ -1018,12 +1018,14 @@ fn outcome(
             vec!["Run `boxr show <id>` with an id printed by a boxr launch".to_string()],
         )
     })?;
-    let updated = Summary {
+    let displayed_note = note.as_deref().or(summary.verdict_note.as_deref());
+    let update = SummaryUpdate {
+        id: id.clone(),
         verdict: Some(verdict.clone()),
-        verdict_note: note.clone().or(summary.verdict_note.clone()),
-        ..summary
+        verdict_note: note,
+        git: None,
     };
-    ledger::append_summary(&home.join(ledger::SUMMARY_FILE), &updated).map_err(|error| {
+    ledger::append_summary_update(&home.join(ledger::SUMMARY_FILE), &update).map_err(|error| {
         Fail::usage(
             format!("{error:#}"),
             vec![format!("Run `boxr show {id}` to check the session")],
@@ -1034,7 +1036,7 @@ fn outcome(
     toon.section("outcome")
         .field("id", &id)
         .field("verdict", &verdict);
-    if let Some(note) = &updated.verdict_note {
+    if let Some(note) = displayed_note {
         toon.field("note", &one_line(note, MESSAGE_LIMIT));
     }
     toon.list(
@@ -1074,11 +1076,13 @@ fn check_commits(home: &Path, id: &str) -> Result<i32> {
         }
     }
     evidence.reverted = Some(reverted.clone());
-    let checked = Summary {
+    let update = SummaryUpdate {
+        id: id.to_string(),
+        verdict: None,
+        verdict_note: None,
         git: Some(evidence),
-        ..summary
     };
-    ledger::append_summary(&home.join(ledger::SUMMARY_FILE), &checked).map_err(|error| {
+    ledger::append_summary_update(&home.join(ledger::SUMMARY_FILE), &update).map_err(|error| {
         Fail::usage(
             format!("{error:#}"),
             vec![format!("Run `boxr show {id}` to check the session")],

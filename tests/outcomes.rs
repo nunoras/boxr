@@ -330,6 +330,23 @@ fn the_revert_check_marks_all_commits_reverted_when_the_branch_is_gone() {
 }
 
 #[test]
+fn show_folds_separate_verdict_and_revert_summary_updates() {
+    let mut harness = Harness::new();
+    let (id, _base) = session_in_git_repo(&mut harness);
+    let commit = harness.git_line(&["rev-parse", "HEAD"]);
+    let mut evidence = summary_of(&harness.boxr_home(), &id)["git"].clone();
+    evidence["reverted"] = json!([commit]);
+    append_summary_update(&harness, &json!({ "id": id.clone(), "verdict": "success" }));
+    append_summary_update(&harness, &json!({ "id": id, "git": evidence }));
+
+    let output = harness.run(&["show", &id]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("verdict: success"), "{stdout}");
+    assert!(stdout.contains("reverted: 1"), "{stdout}");
+}
+
+#[test]
 fn the_revert_check_without_git_evidence_is_a_usage_error() {
     let harness = Harness::new();
     let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
@@ -394,6 +411,19 @@ fn the_reverted_verdict_survives_a_summary_rewrite() {
     let stdout = stdout_of(&show);
     assert_eq!(show.status.code(), Some(0), "{}", stderr_of(&show));
     assert!(stdout.contains("verdict: success"), "{stdout}");
+}
+
+fn append_summary_update(harness: &Harness, update: &serde_json::Value) {
+    use std::io::Write;
+    let encoded = serde_json::to_string(update).expect("summary update");
+    writeln!(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(harness.boxr_home().join("summary.jsonl"))
+            .expect("summary ledger"),
+        "{encoded}"
+    )
+    .expect("summary update line");
 }
 
 fn write_outcome_fixture(
