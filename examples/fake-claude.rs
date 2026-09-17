@@ -106,6 +106,13 @@ fn main() -> ExitCode {
         }
     };
 
+    if let Some(message) = env::var_os(COMMIT_ENV) {
+        if let Err(error) = commit(&message) {
+            eprintln!("cannot commit: {error}");
+            return ExitCode::from(97);
+        }
+    }
+
     let hang_after = env::var(HANG_AFTER_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok());
@@ -131,13 +138,6 @@ fn main() -> ExitCode {
     for entry in transcript_lines {
         append(&mut transcript_file, entry);
         sleep(delay);
-    }
-
-    if let Some(message) = env::var_os(COMMIT_ENV) {
-        if let Err(error) = commit(&message) {
-            eprintln!("cannot commit: {error}");
-            return ExitCode::from(97);
-        }
     }
 
     exit_code()

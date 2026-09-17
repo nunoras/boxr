@@ -464,34 +464,6 @@ pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-pub fn rewrite_summary(path: &Path, summary: &Summary) -> Result<()> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut lines = Vec::new();
-    let mut found = false;
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let is_session = serde_json::from_str::<Value>(line)
-            .ok()
-            .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_string))
-            .is_some_and(|id| id == summary.id);
-        if is_session {
-            found = true;
-            lines.push(serde_json::to_string(summary).context("encoding the session summary")?);
-        } else {
-            lines.push(line.to_string());
-        }
-    }
-    if !found {
-        return Err(anyhow!("no session {} in the ledger", summary.id));
-    }
-    let mut body = lines.join("\n");
-    body.push('\n');
-    fs::write(path, body).with_context(|| format!("writing {}", path.display()))?;
-    restrict_file(path)
-}
-
 pub fn read_summary(home: &Path, id: &str) -> Result<Summary> {
     find_summary(home, id)?.ok_or_else(|| anyhow!("no session {id} in the ledger"))
 }
@@ -508,7 +480,8 @@ pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
     Ok(text
         .lines()
         .filter_map(|line| serde_json::from_str::<Summary>(line).ok())
-        .find(|summary| summary.id == id))
+        .filter(|summary| summary.id == id)
+        .last())
 }
 
 pub fn totals(normalized: &Path) -> Tally {

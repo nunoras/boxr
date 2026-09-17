@@ -365,6 +365,7 @@ fn detach(
             resumed_from: None,
             kind: request.kind.clone(),
             kind_source: request.kind_source.clone(),
+            git_base: git::head(&request.cwd),
         },
     )?;
     let mut supervisor = match detached::spawn_supervisor(&session) {
@@ -1023,7 +1024,7 @@ fn outcome(
         verdict_note: note.clone().or(summary.verdict_note.clone()),
         ..summary
     };
-    ledger::rewrite_summary(&home.join(ledger::SUMMARY_FILE), &updated).map_err(|error| {
+    ledger::append_summary(&home.join(ledger::SUMMARY_FILE), &updated).map_err(|error| {
         Fail::usage(
             format!("{error:#}"),
             vec![format!("Run `boxr show {id}` to check the session")],
@@ -1096,7 +1097,7 @@ fn check_commits(home: &Path, id: &str) -> Result<i32> {
         git: Some(evidence),
         ..summary
     };
-    ledger::rewrite_summary(&home.join(ledger::SUMMARY_FILE), &checked).map_err(|error| {
+    ledger::append_summary(&home.join(ledger::SUMMARY_FILE), &checked).map_err(|error| {
         Fail::usage(
             format!("{error:#}"),
             vec![format!("Run `boxr show {id}` to check the session")],

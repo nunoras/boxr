@@ -17,7 +17,7 @@ const DIMENSIONS: &[&str] = &[
     "limitHit",
 ];
 
-const COLUMNS: &str = "{'model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT'}";
+const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT'}";
 
 pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
     let dimensions = dimensions(by)?;
@@ -130,7 +130,7 @@ fn query(dimensions: &[&str]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM read_json(?, format='newline_delimited', columns={COLUMNS}) WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
+        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), latest AS (SELECT * FROM entries QUALIFY row_number() OVER (PARTITION BY id ORDER BY sequence DESC) = 1) SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM latest WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
         fields.join(", "),
         groups,
         groups

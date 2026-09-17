@@ -161,7 +161,9 @@ pub fn headless(
     apply_config_dir(&mut command, harness.as_ref(), account.dir);
     let started = Instant::now();
     let started_at = now_millis();
-    let git_base = git::head(&request.cwd);
+    let git_base = detached::read_launch(&session)?
+        .and_then(|launch| launch.git_base)
+        .or_else(|| git::head(&request.cwd));
     detached::record_launch(
         &session,
         &LaunchFile {
@@ -176,6 +178,7 @@ pub fn headless(
             resumed_from: resumed_from.clone(),
             kind: request.kind.clone(),
             kind_source: request.kind_source.clone(),
+            git_base: git_base.clone(),
         },
     )?;
     detached::record_supervisor(&session, std::process::id())?;

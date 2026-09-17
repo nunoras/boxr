@@ -37,6 +37,8 @@ pub struct LaunchFile {
     pub kind: Option<String>,
     #[serde(default, rename = "kindSource")]
     pub kind_source: Option<String>,
+    #[serde(default, rename = "gitBase")]
+    pub git_base: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +341,12 @@ fn interrupted_exit_code() -> i32 {
 }
 
 fn append_summary(session: &Session, report: &Report) {
+    let git = read_launch(session).ok().flatten().and_then(|launch| {
+        launch
+            .git_base
+            .as_deref()
+            .and_then(|base| crate::git::collect(&launch.cwd, base))
+    });
     let summary = Summary {
         id: report.id.clone(),
         harness: report.harness.clone(),
@@ -364,7 +372,7 @@ fn append_summary(session: &Session, report: &Report) {
         error: report.error.clone(),
         verdict: None,
         verdict_note: None,
-        git: None,
+        git,
     };
     let _ = ledger::append_summary(&session.summary_path(), &summary);
 }

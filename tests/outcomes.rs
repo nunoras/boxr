@@ -186,6 +186,11 @@ fn outcome_records_the_caller_verdict_and_note() {
     let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["verdict"], "success");
     assert_eq!(summary["verdictNote"], "shipped it");
+
+    let stats = harness.run(&["stats", "--by", "verdict", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(stats_stdout.contains("success,1,"), "{stats_stdout}");
 }
 
 #[test]
