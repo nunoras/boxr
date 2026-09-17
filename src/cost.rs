@@ -50,7 +50,9 @@ impl CostTable {
             + component(non_reasoning_output, price.output, "output")?
             + component(tokens.reasoning, price.reasoning, "reasoning")?;
         if !amount.is_finite() {
-            anyhow::bail!("calculating API-equivalent cost for {model} produced a non-finite amount");
+            anyhow::bail!(
+                "calculating API-equivalent cost for {model} produced a non-finite amount"
+            );
         }
         Ok(Some(amount))
     }
