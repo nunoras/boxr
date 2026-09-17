@@ -330,11 +330,14 @@ fn the_revert_check_marks_all_commits_reverted_when_the_branch_is_gone() {
 }
 
 #[test]
-fn the_revert_check_fails_when_the_recorded_repository_is_gone() {
+fn the_revert_check_fails_when_the_recorded_repository_is_unusable() {
     let mut harness = Harness::new();
     let (id, _base) = session_in_git_repo(&mut harness);
-    let moved = harness.root.path().join("work-moved");
-    fs::rename(harness.work_dir(), &moved).expect("moving the recorded repository");
+    fs::rename(
+        harness.work_dir().join(".git"),
+        harness.work_dir().join(".git-moved"),
+    )
+    .expect("moving the recorded repository aside");
 
     let output = harness.run(&["outcome", "--check-reverted", &id]);
     let stderr = stderr_of(&output);
