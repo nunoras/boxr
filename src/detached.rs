@@ -367,7 +367,7 @@ fn append_summary(session: &Session, report: &Report) {
         cached_tokens: report.cached_tokens,
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
-        interrupted: report.status == "interrupted",
+        interrupted: report.interrupted,
         limit_hit: report.limit_hit,
         error: report.error.clone(),
         verdict: None,

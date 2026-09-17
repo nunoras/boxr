@@ -10,7 +10,6 @@ pub struct Toon {
 pub enum Kind {
     Text,
     Number,
-    Flag,
 }
 
 impl Toon {
@@ -31,11 +30,6 @@ impl Toon {
     }
 
     pub fn number(&mut self, key: &str, value: impl Display) -> &mut Toon {
-        let _ = writeln!(self.body, "  {key}: {value}");
-        self
-    }
-
-    pub fn flag(&mut self, key: &str, value: bool) -> &mut Toon {
         let _ = writeln!(self.body, "  {key}: {value}");
         self
     }
@@ -71,7 +65,7 @@ impl Toon {
                 .zip(kinds)
                 .map(|(cell, kind)| match kind {
                     Kind::Text => scalar(cell),
-                    Kind::Number | Kind::Flag => cell.to_string(),
+                    Kind::Number => cell.to_string(),
                 })
                 .collect();
             let _ = writeln!(self.body, "  {}", cells.join(","));

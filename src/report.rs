@@ -117,10 +117,10 @@ pub fn render(report: &Report, session: &Session) -> String {
             &one_line(report.final_message.as_deref().unwrap_or(""), MESSAGE_LIMIT),
         );
     if report.interrupted {
-        toon.flag("interrupted", true);
+        toon.number("interrupted", true);
     }
     if report.limit_hit {
-        toon.flag("limitHit", true);
+        toon.number("limitHit", true);
     }
     if let Some(error) = &report.error {
         toon.field("error", &one_line(error, MESSAGE_LIMIT));

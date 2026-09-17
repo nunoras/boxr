@@ -51,7 +51,29 @@ pub fn collect(cwd: &Path, base: Option<&str>) -> Option<Evidence> {
     })
 }
 
-pub fn reachable_from_any_branch(repo: &Path, commit: &str) -> Result<bool> {
+pub fn reverted_commits(repo: &Path, commits: &[String]) -> Result<Vec<String>> {
+    if commits.is_empty() {
+        return Ok(Vec::new());
+    }
+    let output = git(repo, &["rev-parse", "--git-dir"])?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!(
+            "{} is not a usable git repository: {}",
+            repo.display(),
+            detail.trim()
+        ));
+    }
+    let mut reverted = Vec::new();
+    for commit in commits {
+        if !reachable_from_any_branch(repo, commit)? {
+            reverted.push(commit.clone());
+        }
+    }
+    Ok(reverted)
+}
+
+fn reachable_from_any_branch(repo: &Path, commit: &str) -> Result<bool> {
     let contains = format!("--contains={commit}");
     let output = git(
         repo,

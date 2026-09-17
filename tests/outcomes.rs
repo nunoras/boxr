@@ -330,6 +330,22 @@ fn the_revert_check_marks_all_commits_reverted_when_the_branch_is_gone() {
 }
 
 #[test]
+fn the_revert_check_fails_when_the_recorded_repository_is_gone() {
+    let mut harness = Harness::new();
+    let (id, _base) = session_in_git_repo(&mut harness);
+    let moved = harness.root.path().join("work-moved");
+    fs::rename(harness.work_dir(), &moved).expect("moving the recorded repository");
+
+    let output = harness.run(&["outcome", "--check-reverted", &id]);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("cannot check the commits"), "{stderr}");
+
+    let summary = summary_of(&harness.boxr_home(), &id);
+    assert!(summary["git"]["reverted"].is_null(), "{summary}");
+}
+
+#[test]
 fn show_folds_separate_verdict_and_revert_summary_updates() {
     let mut harness = Harness::new();
     let (id, _base) = session_in_git_repo(&mut harness);

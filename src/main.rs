@@ -947,10 +947,10 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
         toon.field("verdictNote", &one_line(note, MESSAGE_LIMIT));
     }
     if summary.interrupted {
-        toon.flag("interrupted", true);
+        toon.number("interrupted", true);
     }
     if summary.limit_hit {
-        toon.flag("limitHit", true);
+        toon.number("limitHit", true);
     }
     if let Some(error) = &summary.error {
         toon.field("error", &one_line(error, MESSAGE_LIMIT));
@@ -1069,15 +1069,13 @@ fn check_commits(home: &Path, id: &str) -> Result<i32> {
         )
     })?;
     let commits = evidence.commits.clone();
-    let mut reverted = Vec::new();
-    let mut unknown = Vec::new();
-    for commit in &commits {
-        if git::reachable_from_any_branch(&evidence.repo, commit).map_err(outcome_git_error(id))? {
-            unknown.push(commit.clone());
-        } else {
-            reverted.push(commit.clone());
-        }
-    }
+    let reverted =
+        git::reverted_commits(&evidence.repo, &commits).map_err(outcome_git_error(id))?;
+    let unknown: Vec<String> = commits
+        .iter()
+        .filter(|commit| !reverted.contains(*commit))
+        .cloned()
+        .collect();
     evidence.reverted = Some(reverted.clone());
     let update = SummaryUpdate {
         id: id.to_string(),
