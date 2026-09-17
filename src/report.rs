@@ -75,7 +75,6 @@ impl Report {
 
     pub fn ledger_failed(&self) -> bool {
         matches!(self.ledger, Ledger::Failed(_))
-            || self.cost_error.is_some()
             || self.capture_error.is_some()
             || self.summary_error.is_some()
     }

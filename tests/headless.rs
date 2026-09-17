@@ -735,7 +735,7 @@ fn an_underflowed_priced_component_records_a_calculation_error() {
     let stdout = stdout_of(&output);
     let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
 
-    assert_ne!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert_eq!(summary["status"], "ok");
     assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
     assert!(summary["costError"].is_string(), "{summary}");
