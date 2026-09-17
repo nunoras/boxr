@@ -339,7 +339,7 @@ pub fn headless(
     let interrupted = stop.was_requested() || stopped_externally(&status);
     let git_evidence = git_base
         .as_deref()
-        .and_then(|base| git::collect(&request.cwd, base, started_at as u64));
+        .and_then(|base| git::collect(&request.cwd, base));
     let summary = Summary {
         id: session.id.clone(),
         harness: harness.id().to_string(),

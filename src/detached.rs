@@ -345,7 +345,7 @@ fn append_summary(session: &Session, report: &Report) {
         launch
             .git_base
             .as_deref()
-            .and_then(|base| crate::git::collect(&launch.cwd, base, launch.started_millis))
+            .and_then(|base| crate::git::collect(&launch.cwd, base))
     });
     let summary = Summary {
         id: report.id.clone(),

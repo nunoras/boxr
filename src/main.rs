@@ -144,8 +144,8 @@ enum Command {
     /// Record the caller's verdict on a session, or check whether its commits were reverted
     ///
     /// Record a verdict with `boxr outcome <id> success|partial|failed [--note <text>]`.
-    /// Check whether the commits a session made are still reachable on their branch with
-    /// `boxr outcome --check-reverted <id>`; commits that no longer are get recorded as reverted.
+    /// Check whether the commits a session made remain reachable on a local branch with
+    /// `boxr outcome --check-reverted <id>`; unreachable commits get recorded as reverted.
     Outcome {
         #[arg(long)]
         check_reverted: bool,
@@ -1064,34 +1064,16 @@ fn check_commits(home: &Path, id: &str) -> Result<i32> {
             )],
         )
     })?;
-    let branch = evidence.branch.clone().ok_or_else(|| {
-        Fail::usage(
-            format!("session {id} recorded no branch to check against"),
-            vec![format!(
-                "Run `boxr show {id}` to check what the session recorded"
-            )],
-        )
-    })?;
     let commits = evidence.commits.clone();
     let mut reverted = Vec::new();
-    if !commits.is_empty() {
-        if !git::branch_exists(&evidence.repo, &branch).map_err(outcome_git_error(id))? {
-            reverted = commits.clone();
+    let mut unknown = Vec::new();
+    for commit in &commits {
+        if git::reachable_from_any_branch(&evidence.repo, commit).map_err(outcome_git_error(id))? {
+            unknown.push(commit.clone());
         } else {
-            for commit in &commits {
-                if !git::reachable_from(&evidence.repo, commit, &branch)
-                    .map_err(outcome_git_error(id))?
-                {
-                    reverted.push(commit.clone());
-                }
-            }
+            reverted.push(commit.clone());
         }
     }
-    let survived: Vec<String> = commits
-        .iter()
-        .filter(|commit| !reverted.contains(commit))
-        .cloned()
-        .collect();
     evidence.reverted = Some(reverted.clone());
     let checked = Summary {
         git: Some(evidence),
@@ -1107,10 +1089,9 @@ fn check_commits(home: &Path, id: &str) -> Result<i32> {
     let mut toon = Toon::new();
     toon.section("reverts")
         .field("id", id)
-        .field("branch", &branch)
         .number("commits", commits.len());
     toon.list("reverted", &reverted);
-    toon.list("survived", &survived);
+    toon.list("unknown", &unknown);
     toon.list(
         "help",
         &[
