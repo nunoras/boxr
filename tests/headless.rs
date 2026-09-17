@@ -662,9 +662,11 @@ fn a_small_finite_price_remains_nonzero() {
     );
 
     let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
-    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
+    let stdout = stdout_of(&output);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(!stdout.contains("apiEquivalentCost: 0.00"), "{stdout}");
     assert!(
         summary["apiEquivalentCost"]
             .as_f64()

@@ -76,6 +76,9 @@ pub fn render(cost: Option<f64>) -> String {
 
 fn amount(value: f64) -> String {
     let fixed = format!("{value:.DISPLAY_PLACES$}");
+    if value != 0.0 && fixed == "0.000000" {
+        return value.to_string();
+    }
     let Some((whole, fraction)) = fixed.split_once('.') else {
         return fixed;
     };
