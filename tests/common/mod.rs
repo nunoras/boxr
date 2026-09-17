@@ -370,8 +370,7 @@ pub fn summary_of(home: &Path, id: &str) -> Value {
         .expect("summary ledger")
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("a json line"))
-        .filter(|value| value["id"] == id)
-        .last()
+        .rfind(|value| value["id"] == id)
         .expect("a summary line for the session")
 }
 

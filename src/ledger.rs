@@ -480,8 +480,7 @@ pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
     Ok(text
         .lines()
         .filter_map(|line| serde_json::from_str::<Summary>(line).ok())
-        .filter(|summary| summary.id == id)
-        .last())
+        .rfind(|summary| summary.id == id))
 }
 
 pub fn totals(normalized: &Path) -> Tally {

@@ -19,7 +19,7 @@ A launch records itself under the boxr home as it starts, so `boxr ps` lists run
 While a session runs, boxr follows the harness transcript and writes the normalized ledger live: `normalized.jsonl` is a header line, one ATIF step per line, and a closing line of final metrics.
 Each finished session appends one line to `summary.jsonl` in the boxr home.
 That line carries the exit facts (exit code, harness error, limit hit, interruption) and the git evidence for the working directory: the commits the session made and the files it changed.
-`boxr outcome <id> success|partial|failed --note "..."` records your own verdict on a session, and `boxr outcome --check-reverted <id>` re-checks the recorded commits and marks the ones no longer reachable on their branch as reverted.
+`boxr outcome <id> success|partial|failed --note "..."` records your own verdict on a session, and `boxr outcome --check-reverted <id>` re-checks the recorded commits and marks the ones no local branch contains as reverted, leaving the rest unknown.
 `--kind <kind>` records a declared core kind (`build`, `fix`, `research`, `plan`, `review`, `chore` or `docs`) or a custom kind from `kinds` in `config.json`.
 `boxr stats --by model,kind --since 7d` groups the summary ledger by model, harness, effort, profile, kind, status, verdict, interrupted or limitHit.
 `boxr show <id>` prints that summary, and `boxr export --atif <id>` writes a single-document ATIF trajectory (schema ATIF-v1.8).
