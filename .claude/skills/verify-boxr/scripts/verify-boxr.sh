@@ -44,7 +44,7 @@ fi
 }
 
 case "$feature" in
-  headless-launch) ;;
+  headless-launch | outcomes) ;;
   *)
     say "verify: failed"
     say "  step: guard"
@@ -172,6 +172,12 @@ fi
 
 say "verify: driving a real $harness session on $model (this spends quota)"
 step="drive"
+if [ "$feature" = outcomes ]; then
+  git -C "$work" init -q || die "git init failed in $work"
+  git -C "$work" -c user.name=boxr-verify -c user.email=verify@boxr.invalid -c commit.gpgsign=false \
+    commit -q --allow-empty -m "verify baseline" || die "the baseline commit failed in $work"
+  note gitBase "$(git -C "$work" rev-parse HEAD)"
+fi
 cd "$work"
 BOXR_HOME="$boxr_home"
 export BOXR_HOME
@@ -238,6 +244,33 @@ grep -q '^  ledger: recorded$' "$run_dir/toon.txt" || die "the ledger was not re
 grep -q '^  status: ok$' "$run_dir/toon.txt" || die "the TOON result does not report status ok"
 [ -n "$session_id" ] || die "the TOON result carries no session id"
 [ -n "$harness_session_id" ] || die "the TOON result carries no harness session id"
+
+if [ "$feature" = outcomes ]; then
+  step="outcome"
+  outcome_note=verified
+  "$boxr_bin" outcome "$session_id" success --note "$outcome_note" >"$run_dir/outcome.txt" 2>>"$run_dir/stderr.txt" \
+    || die "boxr outcome failed for $session_id; read $run_dir/outcome.txt"
+  grep -q '^outcome:$' "$run_dir/outcome.txt" || die "the outcome result has no outcome: section"
+  grep -q '^  verdict: success$' "$run_dir/outcome.txt" || die "the outcome result does not report the recorded verdict"
+  grep -q "^  note: $outcome_note$" "$run_dir/outcome.txt" || die "the outcome result does not report the recorded note"
+
+  "$boxr_bin" show "$session_id" >"$run_dir/show.txt" 2>>"$run_dir/stderr.txt" \
+    || die "boxr show failed for $session_id; read $run_dir/show.txt"
+  grep -q '^  verdict: success$' "$run_dir/show.txt" || die "boxr show does not fold the recorded verdict"
+  grep -q "^  verdictNote: $outcome_note$" "$run_dir/show.txt" || die "boxr show does not fold the recorded note"
+
+  "$boxr_bin" stats --by verdict --since 7d >"$run_dir/stats.txt" 2>>"$run_dir/stderr.txt" \
+    || die "boxr stats failed; read $run_dir/stats.txt"
+  grep -q '^  success,1,' "$run_dir/stats.txt" || die "boxr stats does not group the session under its recorded verdict"
+
+  "$boxr_bin" outcome --check-reverted "$session_id" >"$run_dir/reverts.txt" 2>>"$run_dir/stderr.txt" \
+    || die "the revert check failed for $session_id; read $run_dir/reverts.txt"
+  grep -q '^reverts:$' "$run_dir/reverts.txt" || die "the revert check has no reverts: section"
+  grep -q '^  commits: 0$' "$run_dir/reverts.txt" || die "the revert check did not report the recorded commit count"
+
+  summary_records="$(wc -l <"$boxr_home/summary.jsonl" | tr -d ' ')"
+  [ "$summary_records" -ge 3 ] || die "summary.jsonl holds $summary_records records; expected the full summary plus the verdict and revert updates"
+fi
 
 step="cleanup"
 remove_throwaway
