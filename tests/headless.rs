@@ -640,6 +640,21 @@ fn a_summary_records_the_api_equivalent_cost_from_the_price_table() {
 }
 
 #[test]
+fn a_large_finite_price_keeps_the_completed_session() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":1e307,"output":1e307,"cached":1e307,"reasoning":1e307}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert!(summary["apiEquivalentCost"].is_number(), "{summary}");
+}
+
+#[test]
 fn the_configured_currency_sets_the_recorded_currency_and_amount() {
     let harness = Harness::new();
     harness.write_config(SONNET_PRICES);

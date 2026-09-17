@@ -44,11 +44,12 @@ impl CostTable {
         let price = self.prices.get(model)?;
         let uncached_input = tokens.prompt.saturating_sub(tokens.cached);
         let non_reasoning_output = tokens.completion.saturating_sub(tokens.reasoning);
-        let amount = uncached_input as f64 * price.input
-            + tokens.cached as f64 * price.cached
-            + non_reasoning_output as f64 * price.output
-            + tokens.reasoning as f64 * price.reasoning;
-        Some(round(amount / TOKENS_PER_PRICE_UNIT))
+        let amount = (uncached_input as f64 / TOKENS_PER_PRICE_UNIT) * price.input
+            + (tokens.cached as f64 / TOKENS_PER_PRICE_UNIT) * price.cached
+            + (non_reasoning_output as f64 / TOKENS_PER_PRICE_UNIT) * price.output
+            + (tokens.reasoning as f64 / TOKENS_PER_PRICE_UNIT) * price.reasoning;
+        let amount = round(amount);
+        amount.is_finite().then_some(amount)
     }
 }
 
@@ -73,7 +74,11 @@ pub fn calculate(home: &Path, model: &str, tokens: &Tokens) -> Pricing {
 
 fn round(value: f64) -> f64 {
     let places = 10f64.powi(STORED_PLACES);
-    (value * places).round() / places
+    if value.abs() > f64::MAX / places {
+        value
+    } else {
+        (value * places).round() / places
+    }
 }
 
 pub fn render(cost: Option<f64>) -> String {
