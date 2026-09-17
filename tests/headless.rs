@@ -725,6 +725,32 @@ fn a_small_finite_price_remains_nonzero() {
 }
 
 #[test]
+fn an_underflowed_priced_component_records_a_calculation_error() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":1e-323,"output":0.0,"cached":0.0,"reasoning":0.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+
+    assert_ne!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert!(summary["costError"].is_string(), "{summary}");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",unknown,0\n"), "{stats_stdout}");
+}
+
+#[test]
 fn the_configured_currency_sets_the_recorded_currency_and_amount() {
     let harness = Harness::new();
     harness.write_config(SONNET_PRICES);

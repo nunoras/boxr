@@ -45,15 +45,26 @@ impl CostTable {
         };
         let uncached_input = tokens.prompt.saturating_sub(tokens.cached);
         let non_reasoning_output = tokens.completion.saturating_sub(tokens.reasoning);
-        let amount = (uncached_input as f64 / TOKENS_PER_PRICE_UNIT) * price.input
-            + (tokens.cached as f64 / TOKENS_PER_PRICE_UNIT) * price.cached
-            + (non_reasoning_output as f64 / TOKENS_PER_PRICE_UNIT) * price.output
-            + (tokens.reasoning as f64 / TOKENS_PER_PRICE_UNIT) * price.reasoning;
+        let amount = component(uncached_input, price.input, "input")?
+            + component(tokens.cached, price.cached, "cached")?
+            + component(non_reasoning_output, price.output, "output")?
+            + component(tokens.reasoning, price.reasoning, "reasoning")?;
         if !amount.is_finite() {
             anyhow::bail!("calculating API-equivalent cost for {model} produced a non-finite amount");
         }
         Ok(Some(amount))
     }
+}
+
+fn component(tokens: u64, price: f64, kind: &str) -> Result<f64> {
+    if tokens == 0 || price == 0.0 {
+        return Ok(0.0);
+    }
+    let amount = (tokens as f64 / TOKENS_PER_PRICE_UNIT) * price;
+    if amount == 0.0 {
+        anyhow::bail!("calculating API-equivalent {kind} cost produced an underflowed amount");
+    }
+    Ok(amount)
 }
 
 pub fn table(home: &Path) -> Result<CostTable> {
