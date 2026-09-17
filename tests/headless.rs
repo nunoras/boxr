@@ -655,6 +655,25 @@ fn a_large_finite_price_keeps_the_completed_session() {
 }
 
 #[test]
+fn a_pricing_read_failure_keeps_the_completed_session() {
+    let mut harness = Harness::new();
+    harness.write_config(SONNET_PRICES);
+    harness.slow_harness(200);
+    let process = harness.spawn(&["--harness", "claude", "--model", "sonnet", "hello"]);
+
+    sleep(Duration::from_millis(100));
+    harness.write_config("{invalid");
+    let output = process.wait_with_output().expect("boxr exits");
+    let stdout = stdout_of(&output);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert!(summary["costError"].is_string(), "{summary}");
+    assert!(stdout.contains("costError:"), "{stdout}");
+}
+
+#[test]
 fn a_small_finite_price_remains_nonzero() {
     let harness = Harness::new();
     harness.write_config(
@@ -666,7 +685,12 @@ fn a_small_finite_price_remains_nonzero() {
     let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
-    assert!(!stdout.contains("apiEquivalentCost: 0.00"), "{stdout}");
+    assert!(
+        field_of(&stdout, "apiEquivalentCost")
+            .parse::<f64>()
+            .is_ok_and(|cost| cost > 0.0),
+        "{stdout}"
+    );
     assert!(
         summary["apiEquivalentCost"]
             .as_f64()
