@@ -6,6 +6,13 @@ pub struct Toon {
     body: String,
 }
 
+#[derive(Clone, Copy)]
+pub enum Kind {
+    Text,
+    Number,
+    Flag,
+}
+
 impl Toon {
     pub fn new() -> Toon {
         Toon {
@@ -28,6 +35,11 @@ impl Toon {
         self
     }
 
+    pub fn flag(&mut self, key: &str, value: bool) -> &mut Toon {
+        let _ = writeln!(self.body, "  {key}: {value}");
+        self
+    }
+
     pub fn list(&mut self, name: &str, items: &[String]) -> &mut Toon {
         let _ = writeln!(self.body, "{name}[{}]:", items.len());
         for item in items {
@@ -40,16 +52,12 @@ impl Toon {
         self.body.clone()
     }
 
-    pub fn table(&mut self, name: &str, columns: &[&str], rows: &[Vec<String>]) -> &mut Toon {
-        self.table_with_numbers(name, columns, rows, columns.len())
-    }
-
-    pub fn table_with_numbers(
+    pub fn table(
         &mut self,
         name: &str,
         columns: &[&str],
         rows: &[Vec<String>],
-        first_number: usize,
+        kinds: &[Kind],
     ) -> &mut Toon {
         let _ = writeln!(
             self.body,
@@ -60,13 +68,10 @@ impl Toon {
         for row in rows {
             let cells: Vec<String> = row
                 .iter()
-                .enumerate()
-                .map(|(index, cell)| {
-                    if index < first_number {
-                        scalar(cell)
-                    } else {
-                        cell.to_string()
-                    }
+                .zip(kinds)
+                .map(|(cell, kind)| match kind {
+                    Kind::Text => scalar(cell),
+                    Kind::Number | Kind::Flag => cell.to_string(),
                 })
                 .collect();
             let _ = writeln!(self.body, "  {}", cells.join(","));

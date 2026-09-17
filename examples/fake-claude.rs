@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ const NO_TRANSCRIPT_ENV: &str = "BOXR_FAKE_CLAUDE_NO_TRANSCRIPT";
 const HANG_AFTER_ENV: &str = "BOXR_FAKE_CLAUDE_HANG_AFTER";
 const PID_ENV: &str = "BOXR_FAKE_CLAUDE_PID";
 const CONFIG_OUT_ENV: &str = "BOXR_FAKE_CLAUDE_CONFIG_OUT";
+const COMMIT_ENV: &str = "BOXR_FAKE_CLAUDE_COMMIT";
+const GIT_ENV: &str = "BOXR_FAKE_CLAUDE_GIT";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -131,7 +133,34 @@ fn main() -> ExitCode {
         sleep(delay);
     }
 
+    if let Some(message) = env::var_os(COMMIT_ENV) {
+        if let Err(error) = commit(&message) {
+            eprintln!("cannot commit: {error}");
+            return ExitCode::from(97);
+        }
+    }
+
     exit_code()
+}
+
+fn commit(message: &std::ffi::OsStr) -> std::io::Result<()> {
+    let git = env::var_os(GIT_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("git"));
+    run_git(&git, &["add", "-A"])?;
+    let message = message.to_string_lossy();
+    run_git(&git, &["commit", "-m", message.as_ref()])
+}
+
+fn run_git(git: &PathBuf, args: &[&str]) -> std::io::Result<()> {
+    let status = Command::new(git).args(args).status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "git {} failed with {status}",
+        args.join(" ")
+    )))
 }
 
 fn login() -> ExitCode {

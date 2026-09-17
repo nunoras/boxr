@@ -1,6 +1,7 @@
 use crate::clock::{iso8601, now_millis};
 use crate::detached::{self, LaunchFile};
 use crate::fail::Fail;
+use crate::git;
 use crate::harness::{apply_config_dir, Harness, HarnessSession, LaunchRequest, StreamEvent};
 use crate::home::restrict_file;
 use crate::ledger::{self, Follower, Seed, SessionStart, Summary};
@@ -160,6 +161,7 @@ pub fn headless(
     apply_config_dir(&mut command, harness.as_ref(), account.dir);
     let started = Instant::now();
     let started_at = now_millis();
+    let git_base = git::head(&request.cwd);
     detached::record_launch(
         &session,
         &LaunchFile {
@@ -255,6 +257,8 @@ pub fn headless(
 
     let mut harness_session_id = None;
     let mut final_message = None;
+    let mut harness_error = None;
+    let mut hit_limit = false;
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
     loop {
@@ -283,7 +287,21 @@ pub fn headless(
                     model,
                 });
             }
-            StreamEvent::FinalMessage { text } => final_message = Some(text),
+            StreamEvent::FinalMessage {
+                text,
+                error,
+                limit_hit,
+            } => {
+                if let Some(text) = text {
+                    final_message = Some(text);
+                }
+                if let Some(error) = error {
+                    harness_error = Some(error);
+                }
+                if limit_hit {
+                    hit_limit = true;
+                }
+            }
             StreamEvent::Ignored => {}
         }
     }
@@ -315,6 +333,10 @@ pub fn headless(
 
     let exit_code = exit_code_of(&status);
     let duration_ms = started.elapsed().as_millis() as u64;
+    let interrupted = stop.was_requested() || stopped_externally(&status);
+    let git_evidence = git_base
+        .as_deref()
+        .and_then(|base| git::collect(&request.cwd, base));
     let summary = Summary {
         id: session.id.clone(),
         harness: harness.id().to_string(),
@@ -327,12 +349,18 @@ pub fn headless(
         start: iso8601(started_at),
         end: iso8601(now_millis()),
         duration_ms,
-        status: status_of(&status, stop.was_requested()).to_string(),
+        status: status_of(&status, interrupted).to_string(),
         exit_code,
         steps: tally.steps,
         prompt_tokens: tally.prompt_tokens,
         completion_tokens: tally.completion_tokens,
         cached_tokens: tally.cached_tokens,
+        interrupted,
+        limit_hit: hit_limit,
+        error: harness_error.clone(),
+        verdict: None,
+        verdict_note: None,
+        git: git_evidence,
         kind: request.kind.clone(),
         kind_source: request.kind_source.clone(),
     };
@@ -361,6 +389,8 @@ pub fn headless(
         cached_tokens: tally.cached_tokens,
         capture_error: tally.error,
         summary_error: summary_error.clone(),
+        error: harness_error,
+        limit_hit: hit_limit,
         ledger,
         kind: summary.kind.clone(),
         kind_source: summary.kind_source.clone(),
@@ -376,11 +406,11 @@ pub fn headless(
     })
 }
 
-fn status_of(status: &ExitStatus, stopped_by_boxr: bool) -> &'static str {
+fn status_of(status: &ExitStatus, interrupted: bool) -> &'static str {
     if status.success() {
         return "ok";
     }
-    if stopped_by_boxr || stopped_externally(status) {
+    if interrupted {
         return "interrupted";
     }
     "failed"

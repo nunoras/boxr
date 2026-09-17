@@ -163,7 +163,7 @@ Four separate fields, never blended into one score:
 
 - Exit facts: exit code, error, limit hit, interruption. Automatic.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal.
-- Git evidence: commits made, files changed, and later whether those commits survived or were reverted. Automatic.
+- Git evidence: commits made, files changed, and later whether those commits survived or were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
 
 ## Cost

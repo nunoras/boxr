@@ -281,6 +281,8 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         cached_tokens: summary.cached_tokens,
         capture_error: None,
         summary_error: None,
+        error: summary.error.clone(),
+        limit_hit: summary.limit_hit,
         ledger,
     })
 }
@@ -320,6 +322,8 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         cached_tokens: totals.cached_tokens,
         capture_error: totals.error,
         summary_error: None,
+        error: None,
+        limit_hit: false,
         ledger: Ledger::Interrupted,
     }
 }
@@ -355,6 +359,12 @@ fn append_summary(session: &Session, report: &Report) {
         cached_tokens: report.cached_tokens,
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
+        interrupted: report.status == "interrupted",
+        limit_hit: report.limit_hit,
+        error: report.error.clone(),
+        verdict: None,
+        verdict_note: None,
+        git: None,
     };
     let _ = ledger::append_summary(&session.summary_path(), &summary);
 }

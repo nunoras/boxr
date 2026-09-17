@@ -18,8 +18,10 @@ A launch records itself under the boxr home as it starts, so `boxr ps` lists run
 `boxr resume <id> "<prompt>"` continues a finished session with a new prompt, using the same harness, model, effort and profile, and records the continuation as its own session linked to the original.
 While a session runs, boxr follows the harness transcript and writes the normalized ledger live: `normalized.jsonl` is a header line, one ATIF step per line, and a closing line of final metrics.
 Each finished session appends one line to `summary.jsonl` in the boxr home.
+That line carries the exit facts (exit code, harness error, limit hit, interruption) and the git evidence for the working directory: the commits the session made and the files it changed.
+`boxr outcome <id> success|partial|failed --note "..."` records your own verdict on a session, and `boxr outcome --check-reverted <id>` re-checks the recorded commits and marks the ones no longer reachable on their branch as reverted.
 `--kind <kind>` records a declared core kind (`build`, `fix`, `research`, `plan`, `review`, `chore` or `docs`) or a custom kind from `kinds` in `config.json`.
-`boxr stats --by model,kind --since 7d` groups the summary ledger by model, harness, effort, profile or kind.
+`boxr stats --by model,kind --since 7d` groups the summary ledger by model, harness, effort, profile, kind, status, verdict, interrupted or limitHit.
 `boxr show <id>` prints that summary, and `boxr export --atif <id>` writes a single-document ATIF trajectory (schema ATIF-v1.8).
 `boxr skill install --harness claude|codex|pi|all` installs the bundled skills into the selected harnesses, and the prompt skill ships as a placeholder for now.
 Harness, model, effort and account fall back to `defaults.harness`, `defaults.model`, `defaults.effort` and `defaults.account` in `config.json` in the boxr home.

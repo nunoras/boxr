@@ -436,6 +436,18 @@ pub struct Summary {
     pub completion_tokens: u64,
     #[serde(rename = "cachedTokens")]
     pub cached_tokens: u64,
+    #[serde(default)]
+    pub interrupted: bool,
+    #[serde(default, rename = "limitHit")]
+    pub limit_hit: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default, rename = "verdictNote")]
+    pub verdict_note: Option<String>,
+    #[serde(default)]
+    pub git: Option<crate::git::Evidence>,
 }
 
 pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
@@ -450,6 +462,34 @@ pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
     file.write_all(line.as_bytes())
         .and_then(|()| file.flush())
         .with_context(|| format!("writing {}", path.display()))
+}
+
+pub fn rewrite_summary(path: &Path, summary: &Summary) -> Result<()> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut lines = Vec::new();
+    let mut found = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let is_session = serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_string))
+            .is_some_and(|id| id == summary.id);
+        if is_session {
+            found = true;
+            lines.push(serde_json::to_string(summary).context("encoding the session summary")?);
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !found {
+        return Err(anyhow!("no session {} in the ledger", summary.id));
+    }
+    let mut body = lines.join("\n");
+    body.push('\n');
+    fs::write(path, body).with_context(|| format!("writing {}", path.display()))?;
+    restrict_file(path)
 }
 
 pub fn read_summary(home: &Path, id: &str) -> Result<Summary> {
