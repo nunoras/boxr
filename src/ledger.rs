@@ -479,6 +479,8 @@ pub struct Summary {
     pub api_equivalent_cost: Option<f64>,
     #[serde(default)]
     pub currency: Option<String>,
+    #[serde(default, rename = "costError")]
+    pub cost_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

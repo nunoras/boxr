@@ -1,5 +1,5 @@
 use crate::clock::{iso8601, now_millis};
-use crate::cost::{self, CostTable};
+use crate::cost::{self, Pricing};
 use crate::fail::Fail;
 use crate::home::restrict_file;
 use crate::ledger::{self, Summary};
@@ -103,8 +103,18 @@ pub fn abandon_detach(session: &Session, supervisor: Option<Child>) {
         let _ = child.wait();
     }
     let launch = read_launch(session).ok().flatten();
-    let prices = cost::table(&session.home).unwrap_or_default();
-    let report = interrupted(session, launch.as_ref(), &prices);
+    let report = interrupted(
+        session,
+        launch.as_ref(),
+        &cost::calculate(
+            &session.home,
+            launch
+                .as_ref()
+                .map(|launch| launch.model.as_str())
+                .unwrap_or("unknown"),
+            &totals(session),
+        ),
+    );
     let _ = report::write(&session.report_path(), &report);
     append_summary(session, &report);
 }
@@ -132,7 +142,18 @@ pub fn state(home: &Path, id: &str) -> Result<State> {
         return Ok(State::Finished(Box::new(report)));
     }
     if supervisor.is_some() {
-        let report = interrupted(&session, launch.as_ref(), &cost::table(home)?);
+        let report = interrupted(
+            &session,
+            launch.as_ref(),
+            &cost::calculate(
+                home,
+                launch
+                    .as_ref()
+                    .map(|launch| launch.model.as_str())
+                    .unwrap_or("unknown"),
+                &totals(&session),
+            ),
+        );
         append_summary(&session, &report);
         return Ok(State::Finished(Box::new(report)));
     }
@@ -286,6 +307,7 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         reasoning_tokens: summary.reasoning_tokens,
         api_equivalent_cost: summary.api_equivalent_cost,
         currency: summary.currency.clone(),
+        cost_error: summary.cost_error.clone(),
         capture_error: None,
         summary_error: None,
         error: summary.error.clone(),
@@ -295,7 +317,17 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
     })
 }
 
-fn interrupted(session: &Session, launch: Option<&LaunchFile>, prices: &CostTable) -> Report {
+fn totals(session: &Session) -> cost::Tokens {
+    let totals = ledger::totals(&session.normalized_path());
+    cost::Tokens {
+        prompt: totals.prompt_tokens,
+        completion: totals.completion_tokens,
+        cached: totals.cached_tokens,
+        reasoning: totals.reasoning_tokens,
+    }
+}
+
+fn interrupted(session: &Session, launch: Option<&LaunchFile>, pricing: &Pricing) -> Report {
     let totals = ledger::totals(&session.normalized_path());
     let end = now_millis();
     let started = launch
@@ -304,15 +336,6 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>, prices: &CostTabl
     let model = launch
         .map(|launch| launch.model.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    let api_equivalent_cost = prices.cost_of(
-        &model,
-        &cost::Tokens {
-            prompt: totals.prompt_tokens,
-            completion: totals.completion_tokens,
-            cached: totals.cached_tokens,
-            reasoning: totals.reasoning_tokens,
-        },
-    );
     Report {
         id: session.id.clone(),
         status: "interrupted".to_string(),
@@ -339,8 +362,9 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>, prices: &CostTabl
         completion_tokens: totals.completion_tokens,
         cached_tokens: totals.cached_tokens,
         reasoning_tokens: totals.reasoning_tokens,
-        api_equivalent_cost,
-        currency: Some(prices.currency().to_string()),
+        api_equivalent_cost: pricing.api_equivalent_cost,
+        currency: pricing.currency.clone(),
+        cost_error: pricing.error.clone(),
         capture_error: totals.error,
         summary_error: None,
         error: None,
@@ -386,6 +410,7 @@ fn append_summary(session: &Session, report: &Report) {
         reasoning_tokens: report.reasoning_tokens,
         api_equivalent_cost: report.api_equivalent_cost,
         currency: report.currency.clone(),
+        cost_error: report.cost_error.clone(),
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
         interrupted: report.interrupted,

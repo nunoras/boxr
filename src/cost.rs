@@ -15,6 +15,13 @@ pub struct Tokens {
     pub reasoning: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct Pricing {
+    pub api_equivalent_cost: Option<f64>,
+    pub currency: Option<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct CostTable {
     currency: Currency,
@@ -47,6 +54,21 @@ impl CostTable {
 
 pub fn table(home: &Path) -> Result<CostTable> {
     Ok(CostTable::new(&Config::load(home)?))
+}
+
+pub fn calculate(home: &Path, model: &str, tokens: &Tokens) -> Pricing {
+    match table(home) {
+        Ok(table) => Pricing {
+            api_equivalent_cost: table.cost_of(model, tokens),
+            currency: Some(table.currency().to_string()),
+            error: None,
+        },
+        Err(error) => Pricing {
+            api_equivalent_cost: None,
+            currency: None,
+            error: Some(format!("{error:#}")),
+        },
+    }
 }
 
 fn round(value: f64) -> f64 {

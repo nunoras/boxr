@@ -55,6 +55,8 @@ pub struct Report {
     pub api_equivalent_cost: Option<f64>,
     #[serde(default)]
     pub currency: Option<String>,
+    #[serde(default, rename = "costError")]
+    pub cost_error: Option<String>,
     pub capture_error: Option<String>,
     pub summary_error: Option<String>,
     #[serde(default)]
@@ -73,6 +75,7 @@ impl Report {
 
     pub fn ledger_failed(&self) -> bool {
         matches!(self.ledger, Ledger::Failed(_))
+            || self.cost_error.is_some()
             || self.capture_error.is_some()
             || self.summary_error.is_some()
     }
@@ -151,6 +154,9 @@ pub fn render(report: &Report, session: &Session) -> String {
         ledger.field("currency", currency);
     }
     ledger.field("summary", &session.summary_path().display().to_string());
+    if let Some(error) = &report.cost_error {
+        ledger.field("costError", &one_line(error, MESSAGE_LIMIT));
+    }
     if let Some(error) = &report.capture_error {
         ledger.field("captureError", &one_line(error, MESSAGE_LIMIT));
     }
