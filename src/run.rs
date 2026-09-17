@@ -156,7 +156,6 @@ pub fn headless(
         resumed_from,
         from_bytes,
     } = launch;
-    let prices = cost::table(&session.home)?;
     let profile = profile.or_else(|| account.name.map(str::to_string));
     let harness_session = harness_session_of(&session);
     let mut command = harness.command(request, &harness_session)?;
@@ -340,6 +339,7 @@ pub fn headless(
     let duration_ms = started.elapsed().as_millis() as u64;
     let interrupted = stop.was_requested() || stopped_externally(&status);
     let git_evidence = git::collect(&request.cwd, git_base.as_deref());
+    let prices = cost::table(&session.home)?;
     let api_equivalent_cost = prices.cost_of(
         &request.model,
         &cost::Tokens {
