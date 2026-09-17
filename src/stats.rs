@@ -19,6 +19,23 @@ const DIMENSIONS: &[&str] = &[
 
 const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT'}";
 
+const SUMMARY_COLUMNS: &[&str] = &[
+    "model",
+    "harness",
+    "effort",
+    "profile",
+    "kind",
+    "status",
+    "verdict",
+    "interrupted",
+    "limitHit",
+    "start",
+    "promptTokens",
+    "completionTokens",
+    "cachedTokens",
+    "durationMs",
+];
+
 pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
     let dimensions = dimensions(by)?;
     let window = window(since)?;
@@ -129,12 +146,28 @@ fn query(dimensions: &[&str]) -> String {
         .map(|index| index.to_string())
         .collect::<Vec<_>>()
         .join(", ");
+    let summaries = SUMMARY_COLUMNS
+        .iter()
+        .map(|column| {
+            let column = column_name(column);
+            format!("arg_max({column}, sequence) FILTER (WHERE {column} IS NOT NULL) AS {column}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), latest AS (SELECT * FROM entries QUALIFY row_number() OVER (PARTITION BY id ORDER BY sequence DESC) = 1) SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM latest WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
+        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), summaries AS (SELECT id, {summaries} FROM entries GROUP BY id) SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM summaries WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
         fields.join(", "),
         groups,
         groups
     )
+}
+
+fn column_name(column: &str) -> &str {
+    if column == "limitHit" {
+        "\"limitHit\""
+    } else {
+        column
+    }
 }
 
 fn field(dimension: &str) -> String {
