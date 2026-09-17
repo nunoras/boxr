@@ -1018,7 +1018,7 @@ fn outcome(
             vec!["Run `boxr show <id>` with an id printed by a boxr launch".to_string()],
         )
     })?;
-    let displayed_note = note.as_deref().or(summary.verdict_note.as_deref());
+    let displayed_note = note.clone().or_else(|| summary.verdict_note.clone());
     let update = SummaryUpdate {
         id: id.clone(),
         verdict: Some(verdict.clone()),
@@ -1036,7 +1036,7 @@ fn outcome(
     toon.section("outcome")
         .field("id", &id)
         .field("verdict", &verdict);
-    if let Some(note) = displayed_note {
+    if let Some(note) = &displayed_note {
         toon.field("note", &one_line(note, MESSAGE_LIMIT));
     }
     toon.list(

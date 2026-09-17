@@ -366,12 +366,28 @@ pub fn normalized_lines(path: &Path) -> Vec<Value> {
 }
 
 pub fn summary_of(home: &Path, id: &str) -> Value {
-    fs::read_to_string(home.join("summary.jsonl"))
-        .expect("summary ledger")
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("a json line"))
-        .rfind(|value| value["id"] == id)
-        .expect("a summary line for the session")
+    let text = fs::read_to_string(home.join("summary.jsonl")).expect("summary ledger");
+    let mut summary: Option<Value> = None;
+    for line in text.lines() {
+        let value: Value = serde_json::from_str(line).expect("a json line");
+        if value["id"] != id {
+            continue;
+        }
+        if value.get("status").is_some() {
+            summary = Some(value);
+            continue;
+        }
+        let Some(summary) = summary.as_mut() else {
+            continue;
+        };
+        let object = summary.as_object_mut().expect("a summary object");
+        for (key, field) in value.as_object().expect("an update object") {
+            if key != "id" {
+                object.insert(key.clone(), field.clone());
+            }
+        }
+    }
+    summary.expect("a summary line for the session")
 }
 
 pub fn sources_of(steps: &[Value]) -> Vec<&str> {
