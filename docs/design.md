@@ -161,12 +161,14 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code, error, limit hit, interruption. Automatic.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. Today only the claude adapter reports an error or a limit.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal.
 - Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
 
 Git evidence records commits reachable from the exit `HEAD` that were not reachable from the launch `HEAD`, so commits reset away before exit are not recorded.
+The recorded set is an upper bound on the session's work in two cases: when the launch `HEAD` is absent while other refs already carry history, the whole history reachable from the exit `HEAD` is recorded, and when a session dies without writing its summary, the evidence is collected at the next reconciliation instead of at the exit `HEAD`.
+`boxr stats` and `boxr show` can over-count in exactly those two cases.
 A revert check marks a recorded commit reverted only when no local branch contains it; a commit still reachable from any local branch remains unknown.
 
 ## Cost

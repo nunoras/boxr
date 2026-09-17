@@ -54,6 +54,8 @@ pub struct Report {
     pub error: Option<String>,
     #[serde(default)]
     pub limit_hit: bool,
+    #[serde(default)]
+    pub interrupted: bool,
     pub ledger: Ledger,
 }
 
@@ -114,6 +116,9 @@ pub fn render(report: &Report, session: &Session) -> String {
             "message",
             &one_line(report.final_message.as_deref().unwrap_or(""), MESSAGE_LIMIT),
         );
+    if report.interrupted {
+        toon.flag("interrupted", true);
+    }
     if report.limit_hit {
         toon.flag("limitHit", true);
     }

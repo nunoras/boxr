@@ -392,6 +392,7 @@ pub fn headless(
         summary_error: summary_error.clone(),
         error: harness_error,
         limit_hit: hit_limit,
+        interrupted,
         ledger,
         kind: summary.kind.clone(),
         kind_source: summary.kind_source.clone(),

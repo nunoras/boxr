@@ -285,6 +285,7 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         summary_error: None,
         error: summary.error.clone(),
         limit_hit: summary.limit_hit,
+        interrupted: summary.interrupted,
         ledger,
     })
 }
@@ -326,6 +327,7 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         summary_error: None,
         error: None,
         limit_hit: false,
+        interrupted: true,
         ledger: Ledger::Interrupted,
     }
 }

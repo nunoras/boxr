@@ -946,6 +946,9 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     if let Some(note) = &summary.verdict_note {
         toon.field("verdictNote", &one_line(note, MESSAGE_LIMIT));
     }
+    if summary.interrupted {
+        toon.flag("interrupted", true);
+    }
     if summary.limit_hit {
         toon.flag("limitHit", true);
     }
