@@ -1,6 +1,6 @@
 ---
 name: verify-boxr
-description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there. Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher or the ledger writer, or when a harness changes its output format.
+description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there, plus the outcomes surface (`boxr outcome <id> success --note <text>` and `boxr outcome --check-reverted <id>`) that reads and updates the summary ledger. Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher, the ledger writer or the outcome commands, or when a harness changes its output format.
 ---
 
 # verify-boxr
@@ -57,6 +57,7 @@ Read the file for the feature you are proving.
 It carries how to reach the feature, how to drive it, the end state that proves it, and its gotchas.
 
 - [headless-launch](features/headless-launch.md): `boxr --harness claude --model <m> "<prompt>"`, the default blocking mode.
+- [outcomes](features/outcomes.md): `boxr outcome <id> success --note "<text>"` and `boxr outcome --check-reverted <id>`.
 
 A ticket that adds user-facing surface adds its own feature file, wires a driver into `scripts/verify-boxr.sh`, and extends the frontmatter description as part of its own work.
 `features/README.md` states what a feature file must contain.

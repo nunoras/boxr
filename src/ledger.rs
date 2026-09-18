@@ -436,10 +436,67 @@ pub struct Summary {
     pub completion_tokens: u64,
     #[serde(rename = "cachedTokens")]
     pub cached_tokens: u64,
+    #[serde(default)]
+    pub interrupted: bool,
+    #[serde(default, rename = "limitHit")]
+    pub limit_hit: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default, rename = "verdictNote")]
+    pub verdict_note: Option<String>,
+    #[serde(default)]
+    pub git: Option<crate::git::Evidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SummaryUpdate {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "verdictNote",
+        deserialize_with = "double_option"
+    )]
+    pub verdict_note: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<crate::git::Evidence>,
+}
+
+fn double_option<'de, D>(deserializer: D) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+impl SummaryUpdate {
+    fn apply(self, summary: &mut Summary) {
+        if let Some(verdict) = self.verdict {
+            summary.verdict = Some(verdict);
+        }
+        if let Some(verdict_note) = self.verdict_note {
+            summary.verdict_note = verdict_note;
+        }
+        if let Some(git) = self.git {
+            summary.git = Some(git);
+        }
+    }
 }
 
 pub fn append_summary(path: &Path, summary: &Summary) -> Result<()> {
-    let mut line = serde_json::to_string(summary).context("encoding the session summary")?;
+    append_summary_record(path, summary)
+}
+
+pub fn append_summary_update(path: &Path, update: &SummaryUpdate) -> Result<()> {
+    append_summary_record(path, update)
+}
+
+fn append_summary_record(path: &Path, record: &impl Serialize) -> Result<()> {
+    let mut line = serde_json::to_string(record).context("encoding the session summary")?;
     line.push('\n');
     let mut file = OpenOptions::new()
         .create(true)
@@ -465,10 +522,26 @@ pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
             return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
         }
     };
-    Ok(text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Summary>(line).ok())
-        .find(|summary| summary.id == id))
+    let mut summary = None;
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("id").and_then(Value::as_str) != Some(id) {
+            continue;
+        }
+        if value.get("status").is_some() {
+            if let Ok(record) = serde_json::from_value::<Summary>(value) {
+                summary = Some(record);
+            }
+        } else if let (Some(summary), Ok(update)) = (
+            summary.as_mut(),
+            serde_json::from_value::<SummaryUpdate>(value),
+        ) {
+            update.apply(summary);
+        }
+    }
+    Ok(summary)
 }
 
 pub fn totals(normalized: &Path) -> Tally {

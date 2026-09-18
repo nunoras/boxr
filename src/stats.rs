@@ -1,23 +1,58 @@
 use crate::clock;
-use crate::output::Toon;
+use crate::output::{Kind, Toon};
 use anyhow::{anyhow, Context, Result};
 use duckdb::Connection;
 use std::path::Path;
 use std::time::Duration;
 
-const DIMENSIONS: &[&str] = &["model", "harness", "effort", "profile", "kind"];
+const DIMENSIONS: &[&str] = &[
+    "model",
+    "harness",
+    "effort",
+    "profile",
+    "kind",
+    "status",
+    "verdict",
+    "interrupted",
+    "limitHit",
+];
+
+const COLUMNS: &str = "{'id':'VARCHAR','model':'VARCHAR','harness':'VARCHAR','effort':'VARCHAR','profile':'VARCHAR','kind':'VARCHAR','status':'VARCHAR','verdict':'VARCHAR','interrupted':'BOOLEAN','limitHit':'BOOLEAN','start':'VARCHAR','promptTokens':'BIGINT','completionTokens':'BIGINT','cachedTokens':'BIGINT','durationMs':'BIGINT'}";
+
+const SUMMARY_COLUMNS: &[&str] = &[
+    "model",
+    "harness",
+    "effort",
+    "profile",
+    "kind",
+    "status",
+    "verdict",
+    "interrupted",
+    "limitHit",
+    "start",
+    "promptTokens",
+    "completionTokens",
+    "cachedTokens",
+    "durationMs",
+];
 
 pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
     let dimensions = dimensions(by)?;
     let window = window(since)?;
     let cutoff = clock::iso8601(clock::now_millis().saturating_sub(window.as_millis()));
     let path = home.join(crate::ledger::SUMMARY_FILE);
-    let dimension_count = dimensions.len();
     let mut columns = dimensions.clone();
     columns.extend(["sessions", "tokens", "durationMs"]);
+    let kinds = columns
+        .iter()
+        .map(|column| match *column {
+            "interrupted" | "limitHit" | "sessions" | "tokens" | "durationMs" => Kind::Number,
+            _ => Kind::Text,
+        })
+        .collect::<Vec<_>>();
     if !path.is_file() {
         let mut toon = Toon::new();
-        toon.table_with_numbers("stats", &columns, &[], dimension_count);
+        toon.table("stats", &columns, &[], &kinds);
         toon.list(
             "help",
             &["Run a boxr launch to add a session to the ledger".to_string()],
@@ -36,7 +71,7 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
     while let Some(row) = rows.next().context("reading stats rows")? {
         let mut value = Vec::new();
         for index in 0..dimensions.len() {
-            value.push(row.get::<_, String>(index)?);
+            value.push(row.get::<_, Option<String>>(index)?.unwrap_or_default());
         }
         value.push(row.get::<_, i64>(dimensions.len())?.to_string());
         value.push(row.get::<_, i64>(dimensions.len() + 1)?.to_string());
@@ -44,7 +79,7 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
         values.push(value);
     }
     let mut toon = Toon::new();
-    toon.table_with_numbers("stats", &columns, &values, dimension_count);
+    toon.table("stats", &columns, &values, &kinds);
     toon.list(
         "help",
         &["Run `boxr stats --by model,kind --since 30d` to compare a longer window".to_string()],
@@ -110,10 +145,28 @@ fn query(dimensions: &[&str]) -> String {
         .map(|index| index.to_string())
         .collect::<Vec<_>>()
         .join(", ");
+    let summaries = SUMMARY_COLUMNS
+        .iter()
+        .map(|column| {
+            let column = column_name(column);
+            format!("arg_max({column}, sequence) FILTER (WHERE {column} IS NOT NULL) AS {column}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM read_json_auto(?) WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
-        fields.join(", "), groups, groups
+        "WITH entries AS (SELECT *, row_number() OVER () AS sequence FROM read_json(?, format='newline_delimited', columns={COLUMNS})), summaries AS (SELECT id, {summaries} FROM entries GROUP BY id) SELECT {}, COUNT(*)::BIGINT, SUM(promptTokens + completionTokens + cachedTokens)::BIGINT, SUM(durationMs)::BIGINT FROM summaries WHERE CAST(start AS TIMESTAMP) >= CAST(? AS TIMESTAMP) GROUP BY {} ORDER BY {}",
+        fields.join(", "),
+        groups,
+        groups
     )
+}
+
+fn column_name(column: &str) -> &str {
+    if column == "limitHit" {
+        "\"limitHit\""
+    } else {
+        column
+    }
 }
 
 fn field(dimension: &str) -> String {
@@ -121,6 +174,9 @@ fn field(dimension: &str) -> String {
         "effort" => "COALESCE(effort, 'harness-default') AS effort".to_string(),
         "profile" => "COALESCE(profile, 'default') AS profile".to_string(),
         "kind" => "COALESCE(kind, 'unclassified') AS kind".to_string(),
+        "verdict" => "COALESCE(verdict, 'none') AS verdict".to_string(),
+        "interrupted" => "CAST(COALESCE(interrupted, false) AS VARCHAR) AS interrupted".to_string(),
+        "limitHit" => "CAST(COALESCE(\"limitHit\", false) AS VARCHAR) AS \"limitHit\"".to_string(),
         _ => dimension.to_string(),
     }
 }

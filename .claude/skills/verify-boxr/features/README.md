@@ -15,5 +15,6 @@ Add the file in the same ticket that adds the feature, and wire its driver into 
 | feature | command surface | file |
 |---|---|---|
 | headless launch | `boxr --harness claude --model <m> "<prompt>"` | [headless-launch.md](headless-launch.md) |
+| outcomes | `boxr outcome <id> success --note "<text>"` | [outcomes.md](outcomes.md) |
 
 Account profiles (#3), the live normalized ledger (#4) and the later adapters, interactive mode and detached sessions add their own files here when they land.

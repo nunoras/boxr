@@ -109,7 +109,7 @@ Three layers per session:
    Our own fields (profile, subscription, effort, kind, mode, resumedFrom) go in ATIF `extra`.
    `boxr export --atif <id>` wraps the lines into a standard ATIF document.
    ATIF requires at least one step, so exporting a session that recorded none is refused as a usage error rather than written as an invalid document.
-3. Summary: one line per session with harness, model, effort, profile, mode, resumedFrom, subscription, start, end, tokens, cost, status, kind and outcomes.
+3. Summary: append-only JSONL in the boxr home, one full record per session with harness, model, effort, profile, mode, resumedFrom, subscription, start, end, tokens, cost, status, kind and outcomes, plus later field-scoped records carrying only the fields a `boxr outcome` update changes; readers fold the records of one session in order rather than taking the last line.
    All analytics query this layer.
    Status is `ok` for a zero exit and `interrupted` when the harness was stopped from outside or by boxr itself: an external-stop signal (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGKILL`) on Unix, Ctrl-C or Ctrl-Break (`STATUS_CONTROL_C_EXIT`) on Windows, or a termination boxr caused on either platform.
    A crash signal such as `SIGSEGV` or `SIGABRT` is not an interruption.
@@ -161,10 +161,15 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code, error, limit hit, interruption. Automatic.
-- Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal.
-- Git evidence: commits made, files changed, and later whether those commits survived or were reverted. Automatic.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. Today only the claude adapter reports an error or a limit.
+- Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal. A note belongs to the verdict it was recorded with, so a later verdict recorded without `--note` clears the displayed note while the ledger keeps the earlier record.
+- Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
+
+Git evidence records commits reachable from the exit `HEAD` that were not reachable from the launch `HEAD`, so commits reset away before exit are not recorded.
+The recorded set is an upper bound on the session's work in two cases: when the launch `HEAD` is absent while other refs already carry history, the whole history reachable from the exit `HEAD` is recorded, and when a session dies without writing its summary, the evidence is collected at the next reconciliation instead of at the exit `HEAD`.
+`boxr stats` and `boxr show` can over-count in exactly those two cases.
+A revert check marks a recorded commit reverted only when no local branch contains it; a commit still reachable from any local branch remains unknown.
 
 ## Cost
 

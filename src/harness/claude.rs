@@ -69,13 +69,34 @@ impl Harness for ClaudeCode {
                     model: text_at(&value, "model"),
                 })
                 .unwrap_or(StreamEvent::Ignored),
-            Some("result") => value
-                .get("result")
-                .and_then(Value::as_str)
-                .map(|text| StreamEvent::FinalMessage {
-                    text: text.to_string(),
-                })
-                .unwrap_or(StreamEvent::Ignored),
+            Some("result") => {
+                let text = value.get("result").and_then(Value::as_str);
+                let subtype = text_at(&value, "subtype");
+                let terminal_reason = text_at(&value, "terminal_reason");
+                let limit_hit =
+                    matches!(subtype.as_deref(), Some("error_limit" | "error_max_turns"))
+                        || matches!(
+                            terminal_reason.as_deref(),
+                            Some("max_turns" | "blocking_limit" | "budget_exhausted")
+                        );
+                let is_error = value
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let error = if is_error {
+                    text.map(str::to_string).or(subtype)
+                } else {
+                    None
+                };
+                match (text, error.is_some(), limit_hit) {
+                    (None, false, false) => StreamEvent::Ignored,
+                    _ => StreamEvent::FinalMessage {
+                        text: text.map(str::to_string),
+                        error,
+                        limit_hit,
+                    },
+                }
+            }
             _ => StreamEvent::Ignored,
         }
     }
