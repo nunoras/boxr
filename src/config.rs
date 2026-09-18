@@ -13,6 +13,37 @@ pub struct Config {
     pub defaults: Defaults,
     #[serde(default)]
     pub kinds: BTreeMap<String, String>,
+    #[serde(default)]
+    pub currency: Currency,
+    #[serde(default)]
+    pub prices: BTreeMap<String, Price>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub enum Currency {
+    #[default]
+    #[serde(rename = "USD")]
+    Usd,
+    #[serde(rename = "EUR")]
+    Eur,
+}
+
+impl Currency {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Currency::Usd => "USD",
+            Currency::Eur => "EUR",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Price {
+    pub input: f64,
+    pub output: f64,
+    pub cached: f64,
+    pub reasoning: f64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -51,6 +82,24 @@ impl Config {
             if kind.trim().is_empty() || description.trim().is_empty() || description.contains('\n')
             {
                 anyhow::bail!("each custom kind needs a name and one-line description");
+            }
+        }
+        for (model, price) in &self.prices {
+            if model.trim().is_empty() {
+                anyhow::bail!("each price needs a model name");
+            }
+            for (token, rate) in [
+                ("input", price.input),
+                ("output", price.output),
+                ("cached", price.cached),
+                ("reasoning", price.reasoning),
+            ] {
+                if !rate.is_finite() || rate < 0.0 {
+                    anyhow::bail!(
+                        "the {token} price for {model} needs a number of {} per million tokens",
+                        self.currency.code()
+                    );
+                }
             }
         }
         Ok(())

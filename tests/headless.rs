@@ -412,7 +412,9 @@ fn stats_without_sessions_prints_an_empty_table() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(
-        stdout.contains("stats[0]{model,kind,sessions,tokens,durationMs}:"),
+        stdout.contains(
+            "stats[0]{model,kind,currency,sessions,tokens,durationMs,apiEquivalentCost,unpricedSessions}:"
+        ),
         "{stdout}"
     );
 }
@@ -423,17 +425,17 @@ fn stats_groups_the_summary_ledger_by_model_and_kind() {
     write_summary_fixture(
         &harness,
         0,
-        SummaryFixture::new("opus", "build", 10, 20, 30, 40),
+        SummaryFixture::new("opus", "build", 10, 20, 30, 40, Some(0.25)),
     );
     write_summary_fixture(
         &harness,
         1,
-        SummaryFixture::new("opus", "build", 1, 2, 3, 4),
+        SummaryFixture::new("opus", "build", 1, 2, 3, 4, Some(0.5)),
     );
     write_summary_fixture(
         &harness,
         2,
-        SummaryFixture::new("sonnet", "review", 5, 6, 7, 8),
+        SummaryFixture::new("sonnet", "review", 5, 6, 7, 8, None),
     );
 
     let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
@@ -441,11 +443,74 @@ fn stats_groups_the_summary_ledger_by_model_and_kind() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(
-        stdout.contains("stats[2]{model,kind,sessions,tokens,durationMs}:"),
+        stdout.contains(
+            "stats[2]{model,kind,currency,sessions,tokens,durationMs,apiEquivalentCost,unpricedSessions}:"
+        ),
         "{stdout}"
     );
-    assert!(stdout.contains("opus,build,2,66,44"), "{stdout}");
-    assert!(stdout.contains("sonnet,review,1,18,8"), "{stdout}");
+    assert!(stdout.contains("opus,build,USD,2,66,44,0.75,0"), "{stdout}");
+    assert!(
+        stdout.contains("sonnet,review,USD,1,18,8,unknown,1"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn stats_rejects_a_non_finite_cost_total() {
+    let harness = Harness::new();
+    write_summary_fixture(
+        &harness,
+        0,
+        SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(1e308)),
+    );
+    write_summary_fixture(
+        &harness,
+        1,
+        SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(1e308)),
+    );
+
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+
+    assert_ne!(output.status.code(), Some(0), "{}", stdout_of(&output));
+    assert!(
+        stderr_of(&output)
+            .contains("calculating API-equivalent cost total produced a non-finite amount"),
+        "{}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
+fn stats_counts_a_summary_written_before_costs_as_unpriced() {
+    let harness = Harness::new();
+    write_summary_line(
+        &harness,
+        json!({
+            "id": "s-legacy",
+            "harness": "claude",
+            "model": "opus",
+            "effort": "high",
+            "profile": "work",
+            "mode": "headless",
+            "start": "2099-01-01T00:00:00.000Z",
+            "end": "2099-01-01T00:00:00.004Z",
+            "durationMs": 4,
+            "status": "ok",
+            "exitCode": 0,
+            "steps": 1,
+            "promptTokens": 10,
+            "completionTokens": 20,
+            "cachedTokens": 30,
+            "kind": "build",
+            "kindSource": "declared"
+        }),
+    );
+
+    let output = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("opus,unknown,1,60,4,unknown,1"), "{stdout}");
 }
 
 #[test]
@@ -455,7 +520,7 @@ fn stats_groups_ten_thousand_sessions_in_under_a_second() {
         write_summary_fixture(
             &harness,
             index,
-            SummaryFixture::new("sonnet", "build", 1, 2, 3, 4),
+            SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(0.000_002)),
         );
     }
 
@@ -474,6 +539,7 @@ struct SummaryFixture<'a> {
     completion_tokens: u64,
     cached_tokens: u64,
     duration_ms: u64,
+    cost: Option<f64>,
 }
 
 impl<'a> SummaryFixture<'a> {
@@ -484,6 +550,7 @@ impl<'a> SummaryFixture<'a> {
         completion_tokens: u64,
         cached_tokens: u64,
         duration_ms: u64,
+        cost: Option<f64>,
     ) -> SummaryFixture<'a> {
         SummaryFixture {
             model,
@@ -492,32 +559,42 @@ impl<'a> SummaryFixture<'a> {
             completion_tokens,
             cached_tokens,
             duration_ms,
+            cost,
         }
     }
 }
 
 fn write_summary_fixture(harness: &Harness, index: usize, fixture: SummaryFixture<'_>) {
+    write_summary_line(
+        harness,
+        json!({
+            "id": format!("s-{index}"),
+            "harness": "claude",
+            "model": fixture.model,
+            "effort": "high",
+            "profile": "work",
+            "mode": "headless",
+            "start": "2099-01-01T00:00:00.000Z",
+            "end": "2099-01-01T00:00:00.004Z",
+            "durationMs": fixture.duration_ms,
+            "status": "ok",
+            "exitCode": 0,
+            "steps": 1,
+            "promptTokens": fixture.prompt_tokens,
+            "completionTokens": fixture.completion_tokens,
+            "cachedTokens": fixture.cached_tokens,
+            "reasoningTokens": 0,
+            "apiEquivalentCost": fixture.cost,
+            "currency": "USD",
+            "kind": fixture.kind,
+            "kindSource": "declared"
+        }),
+    );
+}
+
+fn write_summary_line(harness: &Harness, line: Value) {
     let home = harness.boxr_home();
     fs::create_dir_all(&home).expect("boxr home");
-    let line = json!({
-        "id": format!("s-{index}"),
-        "harness": "claude",
-        "model": fixture.model,
-        "effort": "high",
-        "profile": "work",
-        "mode": "headless",
-        "start": "2099-01-01T00:00:00.000Z",
-        "end": "2099-01-01T00:00:00.004Z",
-        "durationMs": fixture.duration_ms,
-        "status": "ok",
-        "exitCode": 0,
-        "steps": 1,
-        "promptTokens": fixture.prompt_tokens,
-        "completionTokens": fixture.completion_tokens,
-        "cachedTokens": fixture.cached_tokens,
-        "kind": fixture.kind,
-        "kindSource": "declared"
-    });
     let encoded = serde_json::to_string(&line).expect("summary fixture");
     use std::io::Write;
     writeln!(
@@ -555,6 +632,218 @@ fn a_summary_line_records_the_session_with_its_token_counts() {
     assert!(summary["start"].as_str().expect("start").ends_with('Z'));
     assert!(summary["end"].as_str().expect("end").ends_with('Z'));
     assert!(summary["durationMs"].is_u64());
+}
+
+const SONNET_PRICES: &str = r#"{"currency":"USD","prices":{"sonnet":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":6.0}}}"#;
+
+#[test]
+fn a_summary_records_the_api_equivalent_cost_from_the_price_table() {
+    let harness = Harness::new();
+    harness.write_config(SONNET_PRICES);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("reasoningTokens: 0"), "{stdout}");
+    assert!(stdout.contains("apiEquivalentCost: 0.055109"), "{stdout}");
+    assert!(stdout.contains("currency: USD"), "{stdout}");
+
+    let id = session_id_of(&stdout);
+    let summary = summary_of(&harness.boxr_home(), &id);
+    assert_eq!(summary["currency"], "USD");
+    assert_eq!(summary["reasoningTokens"], 0);
+    assert_close(summary["apiEquivalentCost"].as_f64(), 0.055_109_4);
+
+    let shown = harness.run(&["show", &id]);
+    let shown_stdout = stdout_of(&shown);
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr_of(&shown));
+    assert!(
+        shown_stdout.contains("apiEquivalentCost: 0.055109"),
+        "{shown_stdout}"
+    );
+    assert!(shown_stdout.contains("currency: USD"), "{shown_stdout}");
+}
+
+#[test]
+fn a_large_finite_price_keeps_the_completed_session() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":1e307,"output":1e307,"cached":1e307,"reasoning":1e307}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert!(summary["apiEquivalentCost"].is_number(), "{summary}");
+}
+
+#[test]
+fn a_pricing_read_failure_keeps_the_completed_session() {
+    let mut harness = Harness::new();
+    harness.write_config(SONNET_PRICES);
+    harness.slow_harness(200);
+    let process = harness.spawn(&["--harness", "claude", "--model", "sonnet", "hello"]);
+
+    sleep(Duration::from_millis(100));
+    harness.write_config("{invalid");
+    let output = process.wait_with_output().expect("boxr exits");
+    let stdout = stdout_of(&output);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert!(summary["costError"].is_string(), "{summary}");
+    assert!(stdout.contains("costError:"), "{stdout}");
+}
+
+#[test]
+fn a_small_finite_price_remains_nonzero() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":1e-8,"output":0.0,"cached":0.0,"reasoning":0.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        field_of(&stdout, "apiEquivalentCost")
+            .parse::<f64>()
+            .is_ok_and(|cost| cost > 0.0),
+        "{stdout}"
+    );
+    assert!(
+        summary["apiEquivalentCost"]
+            .as_f64()
+            .is_some_and(|cost| cost > 0.0),
+        "{summary}"
+    );
+}
+
+#[test]
+fn an_underflowed_priced_component_records_a_calculation_error() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":1e-323,"output":0.0,"cached":0.0,"reasoning":0.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert!(summary["costError"].is_string(), "{summary}");
+
+    let shown = harness.run(&["show", &session_id_of(&stdout)]);
+    let shown_stdout = stdout_of(&shown);
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr_of(&shown));
+    assert!(shown_stdout.contains("costError:"), "{shown_stdout}");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",unknown,0\n"), "{stats_stdout}");
+}
+
+#[test]
+fn the_configured_currency_sets_the_recorded_currency_and_amount() {
+    let harness = Harness::new();
+    harness.write_config(SONNET_PRICES);
+    let usd = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let usd_summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&usd)));
+
+    harness.write_config(
+        r#"{"currency":"EUR","prices":{"sonnet":{"input":1.8,"output":5.4,"cached":0.27,"reasoning":5.4}}}"#,
+    );
+    let eur = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let eur_summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&eur)));
+
+    assert_eq!(usd_summary["currency"], "USD");
+    assert_close(usd_summary["apiEquivalentCost"].as_f64(), 0.055_109_4);
+    assert_eq!(eur_summary["currency"], "EUR");
+    assert_close(eur_summary["apiEquivalentCost"].as_f64(), 0.049_598_46);
+}
+
+#[test]
+fn a_cost_calculation_error_is_not_counted_as_unpriced() {
+    let harness = Harness::new();
+    write_summary_line(
+        &harness,
+        json!({
+            "id": "s-overflow",
+            "harness": "claude",
+            "model": "sonnet",
+            "effort": "high",
+            "profile": "work",
+            "mode": "headless",
+            "kind": "build",
+            "start": "2099-01-01T00:00:00.000Z",
+            "end": "2099-01-01T00:00:00.004Z",
+            "durationMs": 4,
+            "status": "ok",
+            "exitCode": 0,
+            "steps": 1,
+            "promptTokens": 1,
+            "completionTokens": 2,
+            "cachedTokens": 3,
+            "apiEquivalentCost": null,
+            "currency": "USD",
+            "costError": "calculating API-equivalent cost for sonnet produced a non-finite amount"
+        }),
+    );
+
+    let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        stdout.contains("sonnet,build,USD,1,6,4,unknown,0"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn an_unpriced_model_records_an_unknown_cost() {
+    let harness = Harness::new();
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"opus":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":6.0}}}"#,
+    );
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("apiEquivalentCost: unknown"), "{stdout}");
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert_eq!(summary["currency"], "USD");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",unknown,1\n"), "{stats_stdout}");
+}
+
+fn assert_close(recorded: Option<f64>, expected: f64) {
+    let recorded = recorded.expect("a recorded cost");
+    assert!(
+        (recorded - expected).abs() < 1e-9,
+        "recorded {recorded}, expected {expected}"
+    );
 }
 
 #[test]
@@ -690,6 +979,46 @@ fn a_reply_split_across_transcript_lines_counts_its_tokens_once_on_a_step_with_c
     assert_eq!(with_metrics, [2, 4], "{lines:?}");
     assert_eq!(steps[1]["metrics"]["completion_tokens"], 408);
     assert_eq!(steps[3]["metrics"]["completion_tokens"], 507);
+}
+
+#[test]
+fn a_claude_session_prices_its_thinking_tokens_from_the_price_table() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"opus":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert_eq!(summary["reasoningTokens"], 553);
+    assert_close(summary["apiEquivalentCost"].as_f64(), 0.083_886_3);
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    let closing = &lines.last().expect("closing line")["final_metrics"];
+    assert_eq!(closing["extra"]["total_reasoning_tokens"], 553);
+    assert_eq!(lines[2]["metrics"]["extra"]["reasoning_tokens"], 257);
+    assert_eq!(lines[4]["metrics"]["extra"]["reasoning_tokens"], 296);
+}
+
+#[test]
+fn a_claude_session_without_thinking_token_details_records_no_reasoning_tokens() {
+    let mut harness = Harness::new();
+    harness.use_fixture("no-thinking-details");
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert_eq!(summary["reasoningTokens"], 0);
+    assert_close(summary["apiEquivalentCost"].as_f64(), 0.055_109_4);
 }
 
 #[test]

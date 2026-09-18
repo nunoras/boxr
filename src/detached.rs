@@ -1,4 +1,5 @@
 use crate::clock::{iso8601, now_millis};
+use crate::cost;
 use crate::fail::Fail;
 use crate::home::restrict_file;
 use crate::ledger::{self, Summary};
@@ -281,6 +282,10 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         prompt_tokens: summary.prompt_tokens,
         completion_tokens: summary.completion_tokens,
         cached_tokens: summary.cached_tokens,
+        reasoning_tokens: summary.reasoning_tokens,
+        api_equivalent_cost: summary.api_equivalent_cost,
+        currency: summary.currency.clone(),
+        cost_error: summary.cost_error.clone(),
         capture_error: None,
         summary_error: None,
         error: summary.error.clone(),
@@ -296,15 +301,26 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
     let started = launch
         .map(|launch| launch.started_millis as u128)
         .unwrap_or(end);
+    let model = launch
+        .map(|launch| launch.model.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let pricing = cost::calculate(
+        &session.home,
+        &model,
+        &cost::Tokens {
+            prompt: totals.prompt_tokens,
+            completion: totals.completion_tokens,
+            cached: totals.cached_tokens,
+            reasoning: totals.reasoning_tokens,
+        },
+    );
     Report {
         id: session.id.clone(),
         status: "interrupted".to_string(),
         harness: launch
             .map(|launch| launch.harness.clone())
             .unwrap_or_else(|| "unknown".to_string()),
-        model: launch
-            .map(|launch| launch.model.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
+        model,
         effort: launch.and_then(|launch| launch.effort.clone()),
         harness_session_id: None,
         mode: launch
@@ -323,6 +339,10 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         prompt_tokens: totals.prompt_tokens,
         completion_tokens: totals.completion_tokens,
         cached_tokens: totals.cached_tokens,
+        reasoning_tokens: totals.reasoning_tokens,
+        api_equivalent_cost: pricing.api_equivalent_cost,
+        currency: pricing.currency.clone(),
+        cost_error: pricing.error.clone(),
         capture_error: totals.error,
         summary_error: None,
         error: None,
@@ -365,6 +385,10 @@ fn append_summary(session: &Session, report: &Report) {
         prompt_tokens: report.prompt_tokens,
         completion_tokens: report.completion_tokens,
         cached_tokens: report.cached_tokens,
+        reasoning_tokens: report.reasoning_tokens,
+        api_equivalent_cost: report.api_equivalent_cost,
+        currency: report.currency.clone(),
+        cost_error: report.cost_error.clone(),
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
         interrupted: report.interrupted,

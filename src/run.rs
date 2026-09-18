@@ -1,4 +1,5 @@
 use crate::clock::{iso8601, now_millis};
+use crate::cost;
 use crate::detached::{self, LaunchFile};
 use crate::fail::Fail;
 use crate::git;
@@ -338,6 +339,16 @@ pub fn headless(
     let duration_ms = started.elapsed().as_millis() as u64;
     let interrupted = stop.was_requested() || stopped_externally(&status);
     let git_evidence = git::collect(&request.cwd, git_base.as_deref());
+    let pricing = cost::calculate(
+        &session.home,
+        &request.model,
+        &cost::Tokens {
+            prompt: tally.prompt_tokens,
+            completion: tally.completion_tokens,
+            cached: tally.cached_tokens,
+            reasoning: tally.reasoning_tokens,
+        },
+    );
     let summary = Summary {
         id: session.id.clone(),
         harness: harness.id().to_string(),
@@ -362,6 +373,10 @@ pub fn headless(
         verdict: None,
         verdict_note: None,
         git: git_evidence,
+        reasoning_tokens: tally.reasoning_tokens,
+        api_equivalent_cost: pricing.api_equivalent_cost,
+        currency: pricing.currency.clone(),
+        cost_error: pricing.error.clone(),
         kind: request.kind.clone(),
         kind_source: request.kind_source.clone(),
     };
@@ -388,6 +403,10 @@ pub fn headless(
         prompt_tokens: tally.prompt_tokens,
         completion_tokens: tally.completion_tokens,
         cached_tokens: tally.cached_tokens,
+        reasoning_tokens: tally.reasoning_tokens,
+        api_equivalent_cost: pricing.api_equivalent_cost,
+        currency: pricing.currency,
+        cost_error: pricing.error,
         capture_error: tally.error,
         summary_error: summary_error.clone(),
         error: harness_error,
