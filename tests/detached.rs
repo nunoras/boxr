@@ -490,7 +490,7 @@ fn a_detached_session_against_a_missing_transcript_is_a_ledger_failure() {
     let waited = harness.run(&["wait", &id]);
     let stdout = stdout_of(&waited);
 
-    assert_eq!(waited.status.code(), Some(5), "{stdout}");
+    assert_eq!(waited.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("ledger: failed"), "{stdout}");
     assert!(stdout.contains("captureError: "), "{stdout}");
 }

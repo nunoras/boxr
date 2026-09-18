@@ -144,3 +144,20 @@ fn resume_exits_zero() {
     let resumed = harness.run(&["resume", &id, "and now?"]);
     assert_eq!(resumed.status.code(), Some(0), "{}", stderr_of(&resumed));
 }
+
+#[test]
+fn resume_reports_a_failed_turn_with_exit_zero() {
+    let mut harness = Harness::new();
+    harness.fail_with("7");
+
+    let id = detach(&harness, "hello");
+    let waited = harness.run(&["wait", &id]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+
+    let resumed = harness.run(&["resume", &id, "and now?"]);
+    let stdout = stdout_of(&resumed);
+
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr_of(&resumed));
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("exitCode: 7"), "{stdout}");
+}

@@ -699,19 +699,14 @@ fn wait(id: &str, timeout: Option<u64>) -> Result<i32> {
     loop {
         if let Some(report) = detached::settled(&home, id)? {
             print!("{}", report::render(&report, &session));
-            return Ok(report::wait_exit_code(&report));
+            return Ok(EXIT_OK);
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return match detached::state(&home, id)? {
-                State::Running(running) => {
-                    print!("{}", render_running(&session, &running));
-                    Ok(EXIT_OK)
-                }
-                State::Finished(report) => {
-                    print!("{}", report::render(&report, &session));
-                    Ok(report::wait_exit_code(&report))
-                }
-            };
+            match detached::state(&home, id)? {
+                State::Running(running) => print!("{}", render_running(&session, &running)),
+                State::Finished(report) => print!("{}", report::render(&report, &session)),
+            }
+            return Ok(EXIT_OK);
         }
         std::thread::sleep(detached::POLL);
     }
@@ -885,7 +880,7 @@ fn resume(id: &str, prompt: &str) -> Result<i32> {
         "{}",
         report::render(&report, &Session::open(&home, &report.id))
     );
-    Ok(report::exit_code(&report))
+    Ok(EXIT_OK)
 }
 
 fn resume_cwd(home: &Path, id: &str) -> Result<PathBuf> {
