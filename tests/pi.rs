@@ -539,6 +539,107 @@ fn resuming_a_pi_session_continues_the_original_harness_transcript() {
     assert_eq!(steps[1]["message"], "follow-up answered by boxr fixture");
 }
 
+#[test]
+fn resuming_a_pi_continuation_keeps_the_origin_harness_dir() {
+    let pi = Pi::new();
+    let parent_out = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let parent_stdout = stdout_of(&parent_out);
+    assert_eq!(
+        parent_out.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&parent_out)
+    );
+    let parent = session_id_of(&parent_stdout);
+    let origin_harness_id = parent.clone();
+    let origin_harness_dir = pi
+        .boxr_home()
+        .join("sessions")
+        .join(&parent)
+        .join("harness");
+    let origin_transcript = session_file_in(&origin_harness_dir, &origin_harness_id);
+    let after_parent = fs::metadata(&origin_transcript)
+        .expect("origin transcript")
+        .len();
+
+    let child_out = pi.run_with_fixture("resume", &["resume", &parent, "and now?"]);
+    let child_stdout = stdout_of(&child_out);
+    assert_eq!(child_out.status.code(), Some(0), "{}", stderr_of(&child_out));
+    let child = session_id_of(&child_stdout);
+    let after_child = fs::metadata(&origin_transcript)
+        .expect("origin transcript after first resume")
+        .len();
+    assert!(after_child > after_parent, "{after_child} <= {after_parent}");
+
+    let again = pi.run_with_fixture("resume", &["resume", &child, "and again?"]);
+    let stdout = stdout_of(&again);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr_of(&again));
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {child}")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("harnessSessionId: {origin_harness_id}")),
+        "{stdout}"
+    );
+
+    let args = pi.recorded_args();
+    assert_eq!(arg_after(&args, "--session-id"), origin_harness_id);
+    assert_eq!(
+        arg_after(&args, "--session-dir"),
+        origin_harness_dir.display().to_string()
+    );
+    assert_eq!(pi.recorded_prompt(), "and again?");
+
+    let grandchild = session_id_of(&stdout);
+    assert_ne!(grandchild, child);
+    let summary = summary_of(&pi.boxr_home(), &grandchild);
+    assert_eq!(summary["mode"], "resume");
+    assert_eq!(summary["resumedFrom"], child.as_str());
+    assert_eq!(summary["harnessSessionId"], origin_harness_id.as_str());
+    assert_eq!(summary["steps"], 2);
+
+    let after_grandchild = fs::metadata(&origin_transcript)
+        .expect("origin transcript after second resume")
+        .len();
+    assert!(
+        after_grandchild > after_child,
+        "{after_grandchild} <= {after_child}"
+    );
+
+    let child_harness = pi
+        .boxr_home()
+        .join("sessions")
+        .join(&child)
+        .join("harness");
+    let child_files: Vec<_> = fs::read_dir(&child_harness)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        child_files.is_empty(),
+        "second hop wrote under the continuation harness dir: {child_files:?}"
+    );
+
+    let lines = normalized_lines(
+        &pi.boxr_home()
+            .join("sessions")
+            .join(&grandchild)
+            .join("normalized.jsonl"),
+    );
+    assert_eq!(lines[0]["extra"]["mode"], "resume");
+    assert_eq!(lines[0]["extra"]["resumedFrom"], child.as_str());
+    let steps = steps_of(&lines);
+    assert_eq!(sources_of(steps), ["user", "agent"]);
+    assert_eq!(steps[1]["message"], "follow-up answered by boxr fixture");
+}
+
 fn session_file_in(dir: &std::path::Path, session_id: &str) -> PathBuf {
     let suffix = format!("_{session_id}.jsonl");
     let mut files: Vec<PathBuf> = fs::read_dir(dir)

@@ -85,8 +85,7 @@ pub fn resume(
     home: &Path,
 ) -> Result<Launch> {
     let session = Session::plan(home);
-    let parent = Session::open(home, &continuation.parent);
-    let harness_session = continued_harness_session(request, &session, &parent);
+    let harness_session = continued_harness_session(request, &session, home, &continuation.parent)?;
     let program = program_of(harness, request, &harness_session)?;
     session.materialize()?;
     Ok(Launch {
@@ -100,17 +99,38 @@ pub fn resume(
     })
 }
 
+pub fn origin_session(home: &Path, id: &str) -> Result<Session> {
+    let mut current = id.to_string();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.clone()) {
+            return Err(anyhow!(
+                "resume chain for {id} loops back to {current}"
+            ));
+        }
+        let summary = ledger::read_summary(home, &current)?;
+        match summary.resumed_from {
+            Some(parent) => current = parent,
+            None => return Ok(Session::open(home, &current)),
+        }
+    }
+}
+
 fn continued_harness_session(
     request: &LaunchRequest,
     session: &Session,
-    parent: &Session,
-) -> HarnessSession {
+    home: &Path,
+    parent_id: &str,
+) -> Result<HarnessSession> {
     match &request.mode {
-        crate::harness::LaunchMode::Resume { harness_session_id } => HarnessSession {
-            session_id: harness_session_id.clone(),
-            dir: parent.harness_dir(),
-        },
-        crate::harness::LaunchMode::Fresh => harness_session_of(session),
+        crate::harness::LaunchMode::Resume { harness_session_id } => {
+            let origin = origin_session(home, parent_id)?;
+            Ok(HarnessSession {
+                session_id: harness_session_id.clone(),
+                dir: origin.harness_dir(),
+            })
+        }
+        crate::harness::LaunchMode::Fresh => Ok(harness_session_of(session)),
     }
 }
 
