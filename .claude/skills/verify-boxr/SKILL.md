@@ -1,6 +1,6 @@
 ---
 name: verify-boxr
-description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there, plus the outcomes surface (`boxr outcome <id> success --note <text>` and `boxr outcome --check-reverted <id>`) that reads and updates the summary ledger. Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher, the ledger writer or the outcome commands, or when a harness changes its output format.
+description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there, the outcomes surface (`boxr outcome <id> success --note <text>` and `boxr outcome --check-reverted <id>`) that reads and updates the summary ledger, and the session cost surface (`currency` and `prices` in config, `apiEquivalentCost` and `currency` in the launch output, `show` and `stats`). Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher, the ledger writer or the outcome commands, or when a harness changes its output format.
 ---
 
 # verify-boxr
@@ -58,6 +58,7 @@ It carries how to reach the feature, how to drive it, the end state that proves 
 
 - [headless-launch](features/headless-launch.md): `boxr --harness claude --model <m> "<prompt>"`, the default blocking mode.
 - [outcomes](features/outcomes.md): `boxr outcome <id> success --note "<text>"` and `boxr outcome --check-reverted <id>`.
+- [session-cost](features/session-cost.md): `currency` and `prices` in `config.json`, recorded in the launch output and read back by `boxr show` and `boxr stats`.
 
 A ticket that adds user-facing surface adds its own feature file, wires a driver into `scripts/verify-boxr.sh`, and extends the frontmatter description as part of its own work.
 `features/README.md` states what a feature file must contain.
@@ -66,6 +67,7 @@ A ticket that adds user-facing surface adds its own feature file, wires a driver
 
 The driver takes no switches.
 It always drives Claude Code on `haiku` at `--effort low` with a fixed one-line no-tool prompt, kills the session after 300 seconds, and writes evidence under `~/.boxr-verify`.
+The `session-cost` drive additionally writes the price table from its feature file into the throwaway home before the launch.
 
 ## Gotchas
 

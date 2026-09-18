@@ -43,8 +43,12 @@ fi
   exit 2
 }
 
+config_json=""
 case "$feature" in
   headless-launch | outcomes) ;;
+  session-cost)
+    config_json='{"currency":"USD","prices":{"haiku":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}'
+    ;;
   *)
     say "verify: failed"
     say "  step: guard"
@@ -113,6 +117,9 @@ trap 'fail 130 "interrupted by SIGINT"' INT
 trap 'fail 143 "terminated by SIGTERM"' TERM
 
 mkdir -p "$run_dir" "$boxr_home" "$work"
+if [ -n "$config_json" ]; then
+  printf '%s\n' "$config_json" >"$boxr_home/config.json"
+fi
 say "verify: feature $feature"
 say "verify: evidence $run_dir"
 
@@ -167,6 +174,7 @@ fi
   printf 'model: %s\n' "$model"
   printf 'effort: %s\n' "$effort"
   printf 'prompt: %s\n' "$prompt"
+  printf 'configJson: %s\n' "${config_json:-none}"
   printf 'throwaway: %s\n' "$throwaway"
 } >"$meta"
 
@@ -261,7 +269,7 @@ if [ "$feature" = outcomes ]; then
 
   "$boxr_bin" stats --by verdict --since 7d >"$run_dir/stats.txt" 2>>"$run_dir/stderr.txt" \
     || die "boxr stats failed; read $run_dir/stats.txt"
-  grep -q '^  success,1,' "$run_dir/stats.txt" || die "boxr stats does not group the session under its recorded verdict"
+  grep -q '^  success,USD,1,' "$run_dir/stats.txt" || die "boxr stats does not group the session under its recorded verdict"
 
   "$boxr_bin" outcome --check-reverted "$session_id" >"$run_dir/reverts.txt" 2>>"$run_dir/stderr.txt" \
     || die "the revert check failed for $session_id; read $run_dir/reverts.txt"
@@ -270,6 +278,54 @@ if [ "$feature" = outcomes ]; then
 
   summary_records="$(wc -l <"$boxr_home/summary.jsonl" | tr -d ' ')"
   [ "$summary_records" -ge 3 ] || die "summary.jsonl holds $summary_records records; expected the full summary plus the verdict and revert updates"
+fi
+
+if [ "$feature" = session-cost ]; then
+  priced_cost="$(field "$run_dir/toon.txt" apiEquivalentCost)"
+  priced_currency="$(field "$run_dir/toon.txt" currency)"
+  [ "$priced_currency" = USD ] || die "the launch records currency '$priced_currency' instead of USD"
+  awk -v value="$priced_cost" 'BEGIN { if (value + 0 <= 0) exit 1; exit 0 }' ||
+    die "the launch records apiEquivalentCost '$priced_cost' instead of a positive amount"
+  if grep -q '^  costError: ' "$run_dir/toon.txt"; then
+    die "the launch recorded a cost error: $(field "$run_dir/toon.txt" costError)"
+  fi
+
+  summary_file="$boxr_home/summary.jsonl"
+  [ -s "$summary_file" ] || die "the summary ledger is missing or empty at $summary_file"
+  cp "$summary_file" "$run_dir/summary.jsonl"
+  summary_json="$(tail -n 1 "$summary_file")"
+  json_field() { printf '%s\n' "$summary_json" | tr ',' '\n' | sed -n "s/^\"$1\":\(.*\)$/\1/p" | tr -d '"'; }
+
+  arithmetic="$(awk \
+    -v prompt="$(json_field promptTokens)" \
+    -v completion="$(json_field completionTokens)" \
+    -v cached="$(json_field cachedTokens)" \
+    -v reasoning="$(json_field reasoningTokens)" \
+    -v recorded="$(json_field apiEquivalentCost)" 'BEGIN {
+      if (cached > prompt) prompt = cached
+      if (reasoning > completion) completion = reasoning
+      expected = ((prompt - cached) * 2.0 + cached * 0.3 + (completion - reasoning) * 6.0 + reasoning * 60.0) / 1000000.0
+      if (recorded <= 0) { printf "the summary records %s", recorded; exit 1 }
+      diff = recorded - expected
+      if (diff < 0) diff = -diff
+      if (diff > expected * 1e-9 + 1e-12) { printf "expected %s, recorded %s", expected, recorded; exit 1 }
+    }')" || die "the summary cost does not match the price table arithmetic: $arithmetic"
+  [ "$(json_field currency)" = USD ] || die "the summary records currency $(json_field currency) instead of USD"
+
+  "$boxr_bin" show "$session_id" >"$run_dir/show.txt" 2>"$run_dir/show.stderr.txt" ||
+    die "boxr show failed; read $run_dir/show.stderr.txt"
+  shown_cost="$(field "$run_dir/show.txt" apiEquivalentCost)"
+  [ "$shown_cost" = "$priced_cost" ] || die "boxr show reads $shown_cost but the launch recorded $priced_cost"
+  [ "$(field "$run_dir/show.txt" currency)" = USD ] || die "boxr show does not read the recorded currency USD"
+
+  "$boxr_bin" stats --by model --since 1d >"$run_dir/stats.txt" 2>"$run_dir/stats.stderr.txt" ||
+    die "boxr stats failed; read $run_dir/stats.stderr.txt"
+  stats_row="$(sed -n 's/^  //p' "$run_dir/stats.txt" | grep '^haiku,USD,' | head -n 1)"
+  [ -n "$stats_row" ] || die "stats has no haiku,USD group; read $run_dir/stats.txt"
+  [ "$(printf '%s\n' "$stats_row" | cut -d, -f6)" = "$priced_cost" ] ||
+    die "stats totals a different cost than the launch recorded; read $run_dir/stats.txt"
+  [ "$(printf '%s\n' "$stats_row" | cut -d, -f7)" = 0 ] ||
+    die "stats counts a priced session as unpriced; read $run_dir/stats.txt"
 fi
 
 step="cleanup"

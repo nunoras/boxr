@@ -1,3 +1,4 @@
+use crate::cost;
 use crate::fail::{EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
 use crate::home::restrict_file;
 use crate::output::{one_line, Toon, MESSAGE_LIMIT};
@@ -48,6 +49,14 @@ pub struct Report {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cached_tokens: u64,
+    #[serde(default, rename = "reasoningTokens")]
+    pub reasoning_tokens: u64,
+    #[serde(default, rename = "apiEquivalentCost")]
+    pub api_equivalent_cost: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default, rename = "costError")]
+    pub cost_error: Option<String>,
     pub capture_error: Option<String>,
     pub summary_error: Option<String>,
     #[serde(default)]
@@ -135,7 +144,18 @@ pub fn render(report: &Report, session: &Session) -> String {
         .number("promptTokens", report.prompt_tokens)
         .number("completionTokens", report.completion_tokens)
         .number("cachedTokens", report.cached_tokens)
-        .field("summary", &session.summary_path().display().to_string());
+        .number("reasoningTokens", report.reasoning_tokens)
+        .number(
+            "apiEquivalentCost",
+            cost::render(report.api_equivalent_cost),
+        );
+    if let Some(currency) = &report.currency {
+        ledger.field("currency", currency);
+    }
+    ledger.field("summary", &session.summary_path().display().to_string());
+    if let Some(error) = &report.cost_error {
+        ledger.field("costError", &one_line(error, MESSAGE_LIMIT));
+    }
     if let Some(error) = &report.capture_error {
         ledger.field("captureError", &one_line(error, MESSAGE_LIMIT));
     }

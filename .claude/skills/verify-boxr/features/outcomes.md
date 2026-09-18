@@ -54,7 +54,7 @@ help[2]:
 
 `show` prints the same session with the verdict folded in, so the `session:` section carries `verdict: success` and `verdictNote: verified`.
 
-`stats` prints `stats[1]{verdict,sessions,tokens,durationMs}:` with one `success,1,...` row.
+`stats` prints `stats[1]{verdict,currency,sessions,tokens,durationMs,apiEquivalentCost,unpricedSessions}:` with one `success,USD,1,...` row.
 
 `outcome --check-reverted` prints the `reverts:` section:
 

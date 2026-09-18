@@ -25,6 +25,9 @@ That line carries the exit facts (exit code and interruption always, plus the ha
 `boxr show <id>` prints that summary, and `boxr export --atif <id>` writes a single-document ATIF trajectory (schema ATIF-v1.8).
 `boxr skill install --harness claude|codex|pi|all` installs the bundled skills into the selected harnesses, and the prompt skill ships as a placeholder for now.
 Harness, model, effort and account fall back to `defaults.harness`, `defaults.model`, `defaults.effort` and `defaults.account` in `config.json` in the boxr home.
+`config.json` also carries the money measure: `currency` is `USD` or `EUR`, and `prices` gives each model its cost per million tokens for `input`, `output`, `cached` and `reasoning`, for example `{"currency":"USD","prices":{"your-model":{"input":1.0,"output":2.0,"cached":0.1,"reasoning":2.0}}}`.
+Every summary line records the session's API-equivalent cost in that currency, or `unknown` when the model has no price, and `boxr stats` sums and groups it.
+The price table is the whole source of prices: boxr never fetches one.
 Account profiles are isolated per-harness config directories boxr owns, under `accounts/<harness>/<name>` in the boxr home.
 `boxr account add --harness claude --name work` runs Claude Code's own login pointed at that directory, `boxr account list` prints the profiles as TOON, and `boxr account remove --harness claude --name work --yes` deletes one.
 `--account work` on a launch points the harness at that profile; boxr never reads or writes the user's normal harness setup.
