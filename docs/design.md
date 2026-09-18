@@ -42,6 +42,7 @@ If boxr crashes, the harness process is killed rather than orphaned, and the ses
 
 `boxr resume <id> "<prompt>"` continues a finished session with a new prompt, using the harness, model, effort, profile and harness session id the original recorded, so the harness resumes its own conversation.
 Claude Code is driven with `--resume <harness session id>` and the prompt on plain stdin, because one prompt continues one conversation; streaming input stays available for a later capability that sends follow-ups into a running session.
+pi is driven with the original `--session-id` and the original `--session-dir` so it appends to the same harness transcript file.
 Like a foreground launch, resume blocks until the continuation finishes and prints the same result shape.
 The continuation is a new session with its own id, its own raw, normalized and summary records, and `mode: resume`, linked to the original through `resumedFrom` in the normalized header, the summary line and the printed result.
 Its ledger starts at the byte offset the harness transcript had already reached when the continuation launched, so the original steps are recorded once, in the original session, and the original session's files are never rewritten.
@@ -169,7 +170,7 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. Today only the claude adapter reports an error or a limit.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal. A note belongs to the verdict it was recorded with, so a later verdict recorded without `--note` clears the displayed note while the ledger keeps the earlier record.
 - Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
