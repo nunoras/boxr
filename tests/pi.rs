@@ -564,12 +564,20 @@ fn resuming_a_pi_continuation_keeps_the_origin_harness_dir() {
 
     let child_out = pi.run_with_fixture("resume", &["resume", &parent, "and now?"]);
     let child_stdout = stdout_of(&child_out);
-    assert_eq!(child_out.status.code(), Some(0), "{}", stderr_of(&child_out));
+    assert_eq!(
+        child_out.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&child_out)
+    );
     let child = session_id_of(&child_stdout);
     let after_child = fs::metadata(&origin_transcript)
         .expect("origin transcript after first resume")
         .len();
-    assert!(after_child > after_parent, "{after_child} <= {after_parent}");
+    assert!(
+        after_child > after_parent,
+        "{after_child} <= {after_parent}"
+    );
 
     let again = pi.run_with_fixture("resume", &["resume", &child, "and again?"]);
     let stdout = stdout_of(&again);
@@ -608,11 +616,7 @@ fn resuming_a_pi_continuation_keeps_the_origin_harness_dir() {
         "{after_grandchild} <= {after_child}"
     );
 
-    let child_harness = pi
-        .boxr_home()
-        .join("sessions")
-        .join(&child)
-        .join("harness");
+    let child_harness = pi.boxr_home().join("sessions").join(&child).join("harness");
     let child_files: Vec<_> = fs::read_dir(&child_harness)
         .map(|entries| {
             entries

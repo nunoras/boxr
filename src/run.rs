@@ -104,9 +104,7 @@ pub fn origin_session(home: &Path, id: &str) -> Result<Session> {
     let mut seen = std::collections::HashSet::new();
     loop {
         if !seen.insert(current.clone()) {
-            return Err(anyhow!(
-                "resume chain for {id} loops back to {current}"
-            ));
+            return Err(anyhow!("resume chain for {id} loops back to {current}"));
         }
         let summary = ledger::read_summary(home, &current)?;
         match summary.resumed_from {

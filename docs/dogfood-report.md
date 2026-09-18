@@ -11,7 +11,7 @@ Binary under test: worktree release build on fm/boxr-dogfood-2.
 - Detached launch through ps, status, wait (finish), tail.
 - stop on a still-running session: action stopped, status interrupted, exitCode 137.
 - Killed supervisor (SIGKILL): status interrupted, exitCode 137, summary folded on first status read. report.json is not written on this path (summary is); show/status still work.
-- resume continues the original pi harness transcript (same --session-id and parent --session-dir), records resumedFrom, keeps harnessSessionId of the parent, and normalizes only the new steps.
+- resume continues the original pi harness transcript (same --session-id and origin --session-dir), records resumedFrom, keeps the origin harnessSessionId, and normalizes only the new steps.
 - show, export --atif, stats --by harness,model,status --since 7d, outcome success --note.
 - Failed turn / usage limit: after fix, status failed, limitHit true, error from pi errorMessage, boxr process exit 1 even when pi exitCode is 0.
 - Expired wait --timeout 1 while still running: status running, exit 0.
@@ -19,7 +19,7 @@ Binary under test: worktree release build on fm/boxr-dogfood-2.
 ## Broke, then fixed in this branch
 
 1. pi adapter ignored stream errors/limits. A real 429 GoUsageLimitError was recorded as status ok / error null / limitHit false. Fix: parse stopReason/errorMessage in final_message; treat reported error or limit as failed even when the process exits 0; Report::succeeded follows status.
-2. pi resume started a fresh session id/dir, so the continuation did not append to the parent transcript and normalized steps stayed 0. Fix: resume Launch keeps parent harness dir + original session id; fake-pi appends when the session file already exists.
+2. pi resume started a fresh session id/dir, so the continuation did not append to the origin transcript and normalized steps stayed 0. Fix: resume Launch keeps the origin harness dir + original session id (walking `resumedFrom` for multi-hop); fake-pi appends when the session file already exists.
 
 ## Left untried / limits of this dogfood
 
