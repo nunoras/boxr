@@ -34,6 +34,19 @@ Account profiles are isolated per-harness config directories boxr owns, under `a
 Everything else in the design is still ahead.
 The design lives in [docs/design.md](docs/design.md).
 
+## Install
+
+```
+cargo install --path .
+```
+
+That puts `boxr` in `~/.cargo/bin`, which is on `PATH` for a normal Rust install, and `boxr --version` then reports the installed version.
+To install a tagged release instead of a checkout:
+
+```
+cargo install --git https://github.com/nunoras/boxr --tag v0.2.0
+```
+
 ## Build
 
 ```
