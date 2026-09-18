@@ -20,7 +20,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - `boxr stats` (`src/stats.rs`) is a pure-Rust pass over `summary.jsonl` (fold, `--since` filter, group by requested dimensions plus currency). Do not reintroduce DuckDB or any other analytics engine for it.
 - Output is axi-style TOON on stdout with `help[]` next-step lines; exit codes are defined in `src/fail.rs`.
   `boxr ps`, `boxr status` and `boxr wait` are a fixed machine contract other tools read, locked by `tests/contract.rs` and by depot's `docs/boxr-contract.md`: `ps` prints `sessions[N]{id,state,harness,model}:`, `status` prints `state:` from `running|finished|stopped|interrupted|failed`, and `wait` prints `status:` from `ok|failed|interrupted|running` and exits zero for every outcome, keeping a non-zero exit only for an unknown session or an unreadable ledger.
-  A blocking launch and `boxr resume` are different: they mirror the harness exit code, because their contract is the harness result rather than a report about it.
+  Blocking launch and `boxr resume` exit rules live under "Resuming a finished session" / supervising in `docs/design.md` (resume exits zero once recorded; blocking follows turn status, including failed-with-harness-exit-0).
 - No comments in code, per the repo's coding standard.
 
 ## Maintaining this file

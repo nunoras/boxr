@@ -23,6 +23,7 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 pub struct Launch {
     pub session: Session,
     program: PathBuf,
+    harness_session: HarnessSession,
     mode: String,
     profile: Option<String>,
     resumed_from: Option<String>,
@@ -37,11 +38,13 @@ pub struct Continuation {
 
 pub fn prepare(harness: &Arc<dyn Harness>, request: &LaunchRequest, home: &Path) -> Result<Launch> {
     let session = Session::plan(home);
-    let program = program_of(harness, request, &session)?;
+    let harness_session = harness_session_of(&session);
+    let program = program_of(harness, request, &harness_session)?;
     session.materialize()?;
     Ok(Launch {
         session,
         program,
+        harness_session,
         mode: "headless".to_string(),
         profile: None,
         resumed_from: None,
@@ -61,11 +64,13 @@ pub fn adopt(
     request: &LaunchRequest,
     session: Session,
 ) -> Result<Launch> {
-    let program = program_of(harness, request, &session)?;
+    let harness_session = harness_session_of(&session);
+    let program = program_of(harness, request, &harness_session)?;
     session.materialize()?;
     Ok(Launch {
         session,
         program,
+        harness_session,
         mode: "headless".to_string(),
         profile: None,
         resumed_from: None,
@@ -80,16 +85,51 @@ pub fn resume(
     home: &Path,
 ) -> Result<Launch> {
     let session = Session::plan(home);
-    let program = program_of(harness, request, &session)?;
+    let harness_session = continued_harness_session(request, &session, home, &continuation.parent)?;
+    let program = program_of(harness, request, &harness_session)?;
     session.materialize()?;
     Ok(Launch {
         session,
         program,
+        harness_session,
         mode: "resume".to_string(),
         profile: continuation.profile.clone(),
         resumed_from: Some(continuation.parent.clone()),
         from_bytes: continuation.from_bytes,
     })
+}
+
+pub fn origin_session(home: &Path, id: &str) -> Result<Session> {
+    let mut current = id.to_string();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.clone()) {
+            return Err(anyhow!("resume chain for {id} loops back to {current}"));
+        }
+        let summary = ledger::read_summary(home, &current)?;
+        match summary.resumed_from {
+            Some(parent) => current = parent,
+            None => return Ok(Session::open(home, &current)),
+        }
+    }
+}
+
+fn continued_harness_session(
+    request: &LaunchRequest,
+    session: &Session,
+    home: &Path,
+    parent_id: &str,
+) -> Result<HarnessSession> {
+    match &request.mode {
+        crate::harness::LaunchMode::Resume { harness_session_id } => {
+            let origin = origin_session(home, parent_id)?;
+            Ok(HarnessSession {
+                session_id: harness_session_id.clone(),
+                dir: origin.harness_dir(),
+            })
+        }
+        crate::harness::LaunchMode::Fresh => Ok(harness_session_of(session)),
+    }
 }
 
 pub fn transcript_size(
@@ -108,9 +148,9 @@ pub fn transcript_size(
 fn program_of(
     harness: &Arc<dyn Harness>,
     request: &LaunchRequest,
-    session: &Session,
+    harness_session: &HarnessSession,
 ) -> Result<PathBuf> {
-    let command = harness.command(request, &harness_session_of(session))?;
+    let command = harness.command(request, harness_session)?;
     locate(&command.program).ok_or_else(|| {
         Fail::harness_unavailable(
             format!(
@@ -151,13 +191,13 @@ pub fn headless(
     let Launch {
         session,
         program,
+        harness_session,
         mode,
         profile,
         resumed_from,
         from_bytes,
     } = launch;
     let profile = profile.or_else(|| account.name.map(str::to_string));
-    let harness_session = harness_session_of(&session);
     let mut command = harness.command(request, &harness_session)?;
     apply_config_dir(&mut command, harness.as_ref(), account.dir);
     let started = Instant::now();
@@ -361,7 +401,7 @@ pub fn headless(
         start: iso8601(started_at),
         end: iso8601(now_millis()),
         duration_ms,
-        status: status_of(&status, interrupted).to_string(),
+        status: status_of(&status, interrupted, harness_error.is_some() || hit_limit).to_string(),
         exit_code,
         steps: tally.steps,
         prompt_tokens: tally.prompt_tokens,
@@ -427,12 +467,12 @@ pub fn headless(
     })
 }
 
-fn status_of(status: &ExitStatus, interrupted: bool) -> &'static str {
-    if status.success() {
-        return "ok";
-    }
+fn status_of(status: &ExitStatus, interrupted: bool, harness_failed: bool) -> &'static str {
     if interrupted {
         return "interrupted";
+    }
+    if status.success() && !harness_failed {
+        return "ok";
     }
     "failed"
 }

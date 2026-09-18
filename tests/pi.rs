@@ -91,13 +91,17 @@ impl Pi {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with_fixture(self.fixture, args)
+    }
+
+    fn run_with_fixture(&self, fixture: &str, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxr"));
         command
             .args(args)
             .current_dir(self.root.path().join("work"))
             .env("BOXR_HOME", self.boxr_home())
             .env("PATH", &self.bin_dir)
-            .env("BOXR_FAKE_PI_FIXTURE", fixture_dir(self.fixture))
+            .env("BOXR_FAKE_PI_FIXTURE", fixture_dir(fixture))
             .env("BOXR_FAKE_PI_EXIT", &self.exit_code)
             .env("BOXR_FAKE_PI_ARGS", &self.args_file)
             .env("BOXR_FAKE_PI_PROMPT", &self.prompt_file);
@@ -408,4 +412,249 @@ fn a_pi_harness_failure_is_a_failed_status_and_a_non_zero_exit_code() {
     let stderr_log = fs::read_to_string(pi.session_dir().join("raw/stderr.log"))
         .expect("captured harness stderr");
     assert!(stderr_log.contains("failing on purpose"), "{stderr_log}");
+}
+
+#[test]
+fn a_pi_turn_error_is_recorded_even_when_the_process_exits_zero() {
+    let mut pi = Pi::new();
+    pi.use_fixture("error");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("exitCode: 0"), "{stdout}");
+    assert!(
+        stdout.contains("error: \"API error (500): the request timed out\""),
+        "{stdout}"
+    );
+
+    let summary = summary_of(&pi.boxr_home(), &session_id_of(&stdout));
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["exitCode"], 0);
+    assert_eq!(summary["limitHit"], false);
+    assert_eq!(summary["error"], "API error (500): the request timed out");
+}
+
+#[test]
+fn a_pi_usage_limit_is_recorded_as_limit_hit() {
+    let mut pi = Pi::new();
+    pi.use_fixture("limit");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("limitHit: true"), "{stdout}");
+    assert!(stdout.contains("Weekly usage limit reached"), "{stdout}");
+
+    let summary = summary_of(&pi.boxr_home(), &session_id_of(&stdout));
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["limitHit"], true);
+    assert_eq!(summary["interrupted"], false);
+    assert!(
+        summary["error"]
+            .as_str()
+            .expect("error")
+            .contains("Weekly usage limit reached"),
+        "{summary:?}"
+    );
+}
+
+#[test]
+fn resuming_a_pi_session_continues_the_original_harness_transcript() {
+    let pi = Pi::new();
+    let parent_out = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let parent_stdout = stdout_of(&parent_out);
+    assert_eq!(
+        parent_out.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&parent_out)
+    );
+    let parent = session_id_of(&parent_stdout);
+    let parent_harness_id = parent.clone();
+    let parent_harness_dir = pi
+        .boxr_home()
+        .join("sessions")
+        .join(&parent)
+        .join("harness");
+    let parent_transcript = session_file_in(&parent_harness_dir, &parent_harness_id);
+    let parent_size = fs::metadata(&parent_transcript)
+        .expect("parent transcript")
+        .len();
+
+    let resumed = pi.run_with_fixture("resume", &["resume", &parent, "and now?"]);
+    let stdout = stdout_of(&resumed);
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr_of(&resumed));
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {parent}")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("harnessSessionId: {parent_harness_id}")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("message: \"follow-up answered by boxr fixture\""),
+        "{stdout}"
+    );
+
+    let args = pi.recorded_args();
+    assert_eq!(arg_after(&args, "--session-id"), parent_harness_id);
+    assert_eq!(
+        arg_after(&args, "--session-dir"),
+        parent_harness_dir.display().to_string()
+    );
+
+    let child = session_id_of(&stdout);
+    assert_ne!(child, parent);
+    let summary = summary_of(&pi.boxr_home(), &child);
+    assert_eq!(summary["mode"], "resume");
+    assert_eq!(summary["resumedFrom"], parent.as_str());
+    assert_eq!(summary["harnessSessionId"], parent_harness_id.as_str());
+    assert_eq!(summary["steps"], 2);
+
+    let continued = session_file_in(&parent_harness_dir, &parent_harness_id);
+    let continued_size = fs::metadata(&continued)
+        .expect("continued transcript")
+        .len();
+    assert!(
+        continued_size > parent_size,
+        "{continued_size} <= {parent_size}"
+    );
+
+    let lines = normalized_lines(
+        &pi.boxr_home()
+            .join("sessions")
+            .join(&child)
+            .join("normalized.jsonl"),
+    );
+    assert_eq!(lines[0]["extra"]["mode"], "resume");
+    assert_eq!(lines[0]["extra"]["resumedFrom"], parent.as_str());
+    let steps = steps_of(&lines);
+    assert_eq!(sources_of(steps), ["user", "agent"]);
+    assert_eq!(steps[0]["message"], "and now?");
+    assert_eq!(steps[1]["message"], "follow-up answered by boxr fixture");
+}
+
+#[test]
+fn resuming_a_pi_continuation_keeps_the_origin_harness_dir() {
+    let pi = Pi::new();
+    let parent_out = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let parent_stdout = stdout_of(&parent_out);
+    assert_eq!(
+        parent_out.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&parent_out)
+    );
+    let parent = session_id_of(&parent_stdout);
+    let origin_harness_id = parent.clone();
+    let origin_harness_dir = pi
+        .boxr_home()
+        .join("sessions")
+        .join(&parent)
+        .join("harness");
+    let origin_transcript = session_file_in(&origin_harness_dir, &origin_harness_id);
+    let after_parent = fs::metadata(&origin_transcript)
+        .expect("origin transcript")
+        .len();
+
+    let child_out = pi.run_with_fixture("resume", &["resume", &parent, "and now?"]);
+    let child_stdout = stdout_of(&child_out);
+    assert_eq!(
+        child_out.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&child_out)
+    );
+    let child = session_id_of(&child_stdout);
+    let after_child = fs::metadata(&origin_transcript)
+        .expect("origin transcript after first resume")
+        .len();
+    assert!(
+        after_child > after_parent,
+        "{after_child} <= {after_parent}"
+    );
+
+    let again = pi.run_with_fixture("resume", &["resume", &child, "and again?"]);
+    let stdout = stdout_of(&again);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr_of(&again));
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {child}")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("harnessSessionId: {origin_harness_id}")),
+        "{stdout}"
+    );
+
+    let args = pi.recorded_args();
+    assert_eq!(arg_after(&args, "--session-id"), origin_harness_id);
+    assert_eq!(
+        arg_after(&args, "--session-dir"),
+        origin_harness_dir.display().to_string()
+    );
+    assert_eq!(pi.recorded_prompt(), "and again?");
+
+    let grandchild = session_id_of(&stdout);
+    assert_ne!(grandchild, child);
+    let summary = summary_of(&pi.boxr_home(), &grandchild);
+    assert_eq!(summary["mode"], "resume");
+    assert_eq!(summary["resumedFrom"], child.as_str());
+    assert_eq!(summary["harnessSessionId"], origin_harness_id.as_str());
+    assert_eq!(summary["steps"], 2);
+
+    let after_grandchild = fs::metadata(&origin_transcript)
+        .expect("origin transcript after second resume")
+        .len();
+    assert!(
+        after_grandchild > after_child,
+        "{after_grandchild} <= {after_child}"
+    );
+
+    let child_harness = pi.boxr_home().join("sessions").join(&child).join("harness");
+    let child_files: Vec<_> = fs::read_dir(&child_harness)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        child_files.is_empty(),
+        "second hop wrote under the continuation harness dir: {child_files:?}"
+    );
+
+    let lines = normalized_lines(
+        &pi.boxr_home()
+            .join("sessions")
+            .join(&grandchild)
+            .join("normalized.jsonl"),
+    );
+    assert_eq!(lines[0]["extra"]["mode"], "resume");
+    assert_eq!(lines[0]["extra"]["resumedFrom"], child.as_str());
+    let steps = steps_of(&lines);
+    assert_eq!(sources_of(steps), ["user", "agent"]);
+    assert_eq!(steps[1]["message"], "follow-up answered by boxr fixture");
+}
+
+fn session_file_in(dir: &std::path::Path, session_id: &str) -> PathBuf {
+    let suffix = format!("_{session_id}.jsonl");
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", dir.display()))
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+        })
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 1, "one session file in {}", dir.display());
+    files.pop().expect("the session file")
 }

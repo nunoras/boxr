@@ -42,8 +42,10 @@ If boxr crashes, the harness process is killed rather than orphaned, and the ses
 
 `boxr resume <id> "<prompt>"` continues a finished session with a new prompt, using the harness, model, effort, profile and harness session id the original recorded, so the harness resumes its own conversation.
 Claude Code is driven with `--resume <harness session id>` and the prompt on plain stdin, because one prompt continues one conversation; streaming input stays available for a later capability that sends follow-ups into a running session.
+pi is driven with the original `--session-id` and the original `--session-dir` so it appends to the same harness transcript file.
 Like a foreground launch, resume blocks until the continuation finishes and prints the same result shape.
 The continuation is a new session with its own id, its own raw, normalized and summary records, and `mode: resume`, linked to the original through `resumedFrom` in the normalized header, the summary line and the printed result.
+A multi-hop resume walks `resumedFrom` to the origin session so `--session-dir` and the transcript byte offset still point at that original harness directory, not an intermediate continuation's empty one.
 Its ledger starts at the byte offset the harness transcript had already reached when the continuation launched, so the original steps are recorded once, in the original session, and the original session's files are never rewritten.
 The launch record stores `mode`, `profile` and `resumedFrom` with the rest of the launch, so a supervisor killed before the report and summary are written still reconstructs an interrupted continuation linked to its parent.
 Resuming an unknown session, a session that is still running, a session with no recorded harness session id, or one whose harness transcript is gone is a usage error that names which of those it was.
@@ -61,10 +63,11 @@ Only when a supervisor record was written and its pid is dead, and the summary a
 `boxr wait` exits zero whenever it can report an outcome, whether the turn ended `ok`, `failed` or `interrupted` or is still `running` because its timeout expired, and keeps a non-zero exit only when boxr cannot do its job at all: an unknown session, or records it cannot read.
 A caller that reads a non-zero exit as a failure cannot otherwise tell a failed turn from a command that never ran, and a failed turn is an outcome to record rather than an error.
 `boxr resume` reports a turn the same way, so it exits zero once it has recorded the continuation, including when the harness turn failed or the ledger could not be written.
-A blocking launch is the one that differs: it mirrors the harness exit code, because its contract is the harness result rather than a report about it.
+A blocking launch is the one that differs: its process exit follows the turn outcome, not only the harness process exit code, because its contract is the harness result rather than a report about it.
+It exits non-zero when the turn is `failed` or `interrupted`, including when the harness process still exited zero but reported an error or a limit, and exits zero only when the turn is `ok`.
 The shape of `boxr ps`, `boxr status` and `boxr wait` is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
 `status` is the turn outcome and `state` is the session lifecycle, so a finished session reads `state: finished` with `status: ok`.
-boxr's own lifecycle maps onto the five states rather than adding to them: a session that ended with the harness exiting zero is `finished`, a harness failure is `failed`, and a session ended from outside is `interrupted`.
+boxr's own lifecycle maps onto the five states rather than adding to them: a turn with status `ok` is `finished`, a harness failure or reported error/limit is `failed`, and a session ended from outside is `interrupted`.
 `stopped` is never printed, because `boxr stop` ends a session from outside and that is already `interrupted`.
 `boxr tail` streams the normalized ledger as it is appended.
 `boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
@@ -169,7 +172,7 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. Today only the claude adapter reports an error or a limit.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal. A note belongs to the verdict it was recorded with, so a later verdict recorded without `--note` clears the displayed note while the ledger keeps the earlier record.
 - Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
