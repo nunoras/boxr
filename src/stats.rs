@@ -59,13 +59,8 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
     let kinds = columns
         .iter()
         .map(|column| match *column {
-            "interrupted"
-            | "limitHit"
-            | "sessions"
-            | "tokens"
-            | "durationMs"
-            | "apiEquivalentCost"
-            | "unpricedSessions" => Kind::Number,
+            "interrupted" | "limitHit" | "sessions" | "tokens" | "durationMs"
+            | "apiEquivalentCost" | "unpricedSessions" => Kind::Number,
             _ => Kind::Text,
         })
         .collect::<Vec<_>>();
