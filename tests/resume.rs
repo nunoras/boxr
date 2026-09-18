@@ -398,7 +398,7 @@ fn await_running_session(harness: &Harness) -> String {
     loop {
         let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
         if let Some(row) = rows.first() {
-            return row.split(' ').next().expect("a session id").to_string();
+            return row.split(',').next().expect("a session id").to_string();
         }
         assert!(
             Instant::now() < deadline,

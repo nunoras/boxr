@@ -71,3 +71,10 @@ pub fn restrict_file(path: &std::path::Path) -> Result<()> {
 pub fn restrict_file(_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
+
+pub fn write_file_atomically(path: &std::path::Path, body: &str) -> Result<()> {
+    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+    fs::write(&temp, body).with_context(|| format!("writing {}", temp.display()))?;
+    restrict_file(&temp)?;
+    fs::rename(&temp, path).with_context(|| format!("replacing {}", path.display()))
+}

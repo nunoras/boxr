@@ -1,7 +1,7 @@
 use crate::clock::{iso8601, now_millis};
 use crate::cost;
 use crate::fail::Fail;
-use crate::home::restrict_file;
+use crate::home::{restrict_file, write_file_atomically};
 use crate::ledger::{self, Summary};
 use crate::report::{self, Ledger, Report};
 use crate::session::Session;
@@ -403,8 +403,7 @@ fn append_summary(session: &Session, report: &Report) {
 
 fn write_record(path: &Path, value: &impl Serialize) -> Result<()> {
     let text = serde_json::to_string(value).context("encoding a session record")?;
-    fs::write(path, format!("{text}\n")).with_context(|| format!("writing {}", path.display()))?;
-    restrict_file(path)
+    write_file_atomically(path, &format!("{text}\n"))
 }
 
 fn read_record<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {

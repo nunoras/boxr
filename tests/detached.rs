@@ -56,7 +56,7 @@ fn await_running_session(harness: &Harness) -> String {
     loop {
         let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
         if let Some(row) = rows.first() {
-            return row.split(' ').next().expect("a session id").to_string();
+            return row.split(',').next().expect("a session id").to_string();
         }
         assert!(
             Instant::now() < deadline,
@@ -172,19 +172,29 @@ fn ps_status_and_wait_follow_a_detached_session_to_its_end() {
     harness.slow_harness(200);
 
     let id = detach(&harness, "review");
-    let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
+    let stdout = stdout_of(&harness.run(&["ps"]));
+    assert!(
+        stdout.contains("sessions[1]{id,state,harness,model}:"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("  {id},running,claude,opus")),
+        "{stdout}"
+    );
+    let rows = ps_sessions(&stdout);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(rows[0].starts_with(&id), "{rows:?}");
-    assert!(stdout_of(&harness.run(&["status", &id])).contains("status: running"));
+    assert!(stdout_of(&harness.run(&["status", &id])).contains("state: running"));
 
     let waited = harness.run(&["wait", &id]);
     let stdout = stdout_of(&waited);
     assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
     assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(stdout.contains("state: finished"), "{stdout}");
     assert!(stdout.contains("steps: 4"), "{stdout}");
     assert!(stdout.contains("completionTokens: 915"), "{stdout}");
 
-    assert!(stdout_of(&harness.run(&["status", &id])).contains("status: ok"));
+    assert!(stdout_of(&harness.run(&["status", &id])).contains("state: finished"));
     let after = stdout_of(&harness.run(&["ps"]));
     assert!(ps_sessions(&after).is_empty(), "{after}");
     assert!(after.contains("running: 0"), "{after}");
@@ -234,25 +244,23 @@ fn without_session_specifics(stdout: &str, id: &str) -> String {
 }
 
 #[test]
-fn waiting_with_a_timeout_leaves_the_session_running() {
+fn waiting_with_a_timeout_reports_a_running_session_and_exits_zero() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");
     harness.slow_harness(300);
 
     let id = detach(&harness, "review");
     let timed_out = harness.run(&["wait", "--timeout", "1", &id]);
+    let stdout = stdout_of(&timed_out);
     assert_eq!(
         timed_out.status.code(),
-        Some(6),
-        "stdout: {}",
-        stdout_of(&timed_out)
-    );
-    assert!(
-        stderr_of(&timed_out).contains("still running"),
-        "{}",
+        Some(0),
+        "stderr: {}",
         stderr_of(&timed_out)
     );
-    assert!(stdout_of(&harness.run(&["status", &id])).contains("status: running"));
+    assert!(stdout.contains("status: running"), "{stdout}");
+    assert!(stdout.contains("state: running"), "{stdout}");
+    assert!(stdout_of(&harness.run(&["status", &id])).contains("state: running"));
 
     let waited = harness.run(&["wait", &id]);
     assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
@@ -466,8 +474,9 @@ fn a_detached_harness_failure_still_records_a_failed_session() {
     let waited = harness.run(&["wait", &id]);
     let stdout = stdout_of(&waited);
 
-    assert_eq!(waited.status.code(), Some(1), "{stdout}");
+    assert_eq!(waited.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("state: failed"), "{stdout}");
     assert!(stdout.contains("exitCode: 7"), "{stdout}");
     assert_eq!(summary_of(&harness.boxr_home(), &id)["status"], "failed");
 }
@@ -481,7 +490,7 @@ fn a_detached_session_against_a_missing_transcript_is_a_ledger_failure() {
     let waited = harness.run(&["wait", &id]);
     let stdout = stdout_of(&waited);
 
-    assert_eq!(waited.status.code(), Some(5), "{stdout}");
+    assert_eq!(waited.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("ledger: failed"), "{stdout}");
     assert!(stdout.contains("captureError: "), "{stdout}");
 }
@@ -616,8 +625,13 @@ fn a_launch_record_without_a_supervisor_is_still_starting() {
     let timed_out = harness.run(&["wait", "--timeout", "1", id]);
     assert_eq!(
         timed_out.status.code(),
-        Some(6),
+        Some(0),
         "wait settled a starting session: {}",
+        stdout_of(&timed_out)
+    );
+    assert!(
+        stdout_of(&timed_out).contains("state: running"),
+        "{}",
         stdout_of(&timed_out)
     );
     assert!(
