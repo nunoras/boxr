@@ -269,7 +269,7 @@ if [ "$feature" = outcomes ]; then
 
   "$boxr_bin" stats --by verdict --since 7d >"$run_dir/stats.txt" 2>>"$run_dir/stderr.txt" \
     || die "boxr stats failed; read $run_dir/stats.txt"
-  grep -q '^  success,1,' "$run_dir/stats.txt" || die "boxr stats does not group the session under its recorded verdict"
+  grep -q '^  success,USD,1,' "$run_dir/stats.txt" || die "boxr stats does not group the session under its recorded verdict"
 
   "$boxr_bin" outcome --check-reverted "$session_id" >"$run_dir/reverts.txt" 2>>"$run_dir/stderr.txt" \
     || die "the revert check failed for $session_id; read $run_dir/reverts.txt"

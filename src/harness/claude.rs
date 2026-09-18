@@ -223,12 +223,19 @@ fn metrics(usage: &Value) -> Option<Metrics> {
     let created = number_at(usage, "cache_creation_input_tokens");
     let cached = number_at(usage, "cache_read_input_tokens");
     let output = number_at(usage, "output_tokens");
+    let reasoning = usage
+        .get("output_tokens_details")
+        .map(|details| number_at(details, "thinking_tokens"))
+        .unwrap_or(0);
     let mut extra = Map::new();
     if created > 0 {
         extra.insert(
             "cache_creation_input_tokens".to_string(),
             Value::from(created),
         );
+    }
+    if reasoning > 0 {
+        extra.insert("reasoning_tokens".to_string(), Value::from(reasoning));
     }
     Some(Metrics {
         prompt_tokens: Some(input + created + cached),

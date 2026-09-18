@@ -179,6 +179,7 @@ Three measures, each labeled:
 - API-equivalent cost: tokens times list price, the estimate that makes models comparable.
   The list prices come from `prices` in config, keyed by model, in the currency `currency` sets (`USD` or `EUR`), per million tokens for `input`, `output`, `cached` and `reasoning`.
   Cached input and reasoning tokens are subtotals of the prompt and completion counts the harness reports, so they are priced at their own rate and the rest at the input and output rates: `(prompt - cached) * input + cached * cached + (completion - reasoning) * output + reasoning * reasoning`.
+  The reasoning rate maps whatever split the harness reports (Claude's `thinking_tokens`, pi's `reasoning`) onto the table, so a provider that bills thinking as ordinary output needs `reasoning` set equal to `output`.
   A model with no entry in the table records `apiEquivalentCost` as null rather than zero, so an unpriced session is never read as a free one.
   Prices are arithmetic on the table and nothing else; boxr never fetches a price.
 - Quota share: the percentage of a subscription window consumed, from quota readings before and after, split by token share when sessions overlap. Always marked estimated.

@@ -982,6 +982,46 @@ fn a_reply_split_across_transcript_lines_counts_its_tokens_once_on_a_step_with_c
 }
 
 #[test]
+fn a_claude_session_prices_its_thinking_tokens_from_the_price_table() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"opus":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert_eq!(summary["reasoningTokens"], 553);
+    assert_close(summary["apiEquivalentCost"].as_f64(), 0.083_886_3);
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    let closing = &lines.last().expect("closing line")["final_metrics"];
+    assert_eq!(closing["extra"]["total_reasoning_tokens"], 553);
+    assert_eq!(lines[2]["metrics"]["extra"]["reasoning_tokens"], 257);
+    assert_eq!(lines[4]["metrics"]["extra"]["reasoning_tokens"], 296);
+}
+
+#[test]
+fn a_claude_session_without_thinking_token_details_records_no_reasoning_tokens() {
+    let mut harness = Harness::new();
+    harness.use_fixture("no-thinking-details");
+    harness.write_config(
+        r#"{"currency":"USD","prices":{"sonnet":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}"#,
+    );
+
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    assert_eq!(summary["reasoningTokens"], 0);
+    assert_close(summary["apiEquivalentCost"].as_f64(), 0.055_109_4);
+}
+
+#[test]
 fn a_harness_killed_mid_run_still_leaves_a_closed_ledger_and_a_summary() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");
