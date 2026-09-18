@@ -58,6 +58,11 @@ A session stays running while its supervisor is alive, even if a summary line al
 A launch record without a supervisor pid is still starting, not interrupted.
 Only when a supervisor record was written and its pid is dead, and the summary and report are still missing, is the session recorded as interrupted the first time `ps`, `status` or `wait` looks at it, so a killed supervisor still leaves one summarized session.
 `boxr status` reports a running session without blocking and the launch result of a finished one, and `boxr wait` blocks until the result exists.
+`boxr wait` on an expired timeout reports the session as still running and exits zero, because a caller that reads a non-zero exit as a failure cannot tell an expired timeout from a real error.
+The shape of these two commands is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
+`status` is the turn outcome and `state` is the session lifecycle, so a finished session reads `state: finished` with `status: ok`.
+boxr's own lifecycle maps onto the five states rather than adding to them: a session that ended with the harness exiting zero is `finished`, a harness failure is `failed`, and a session ended from outside is `interrupted`.
+`stopped` is never printed, because `boxr stop` ends a session from outside and that is already `interrupted`.
 `boxr tail` streams the normalized ledger as it is appended.
 `boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
 The harness dies with boxr: on Linux it is given `PR_SET_PDEATHSIG`, and on Windows it joins a job object that kills it when boxr exits.

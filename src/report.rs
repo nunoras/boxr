@@ -92,11 +92,20 @@ pub fn write(path: &Path, report: &Report) -> Result<()> {
     write_file_atomically(path, &format!("{text}\n"))
 }
 
+pub fn state_of(status: &str) -> &'static str {
+    match status {
+        "ok" => "finished",
+        "interrupted" => "interrupted",
+        _ => "failed",
+    }
+}
+
 pub fn render(report: &Report, session: &Session) -> String {
     let mut toon = Toon::new();
     toon.section("session")
         .field("id", &report.id)
         .field("status", &report.status)
+        .field("state", state_of(&report.status))
         .field("harness", &report.harness)
         .field("model", &report.model)
         .field(

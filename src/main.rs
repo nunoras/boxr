@@ -615,23 +615,23 @@ fn ps() -> Result<i32> {
             continue;
         };
         if let State::Running(running) = state {
-            let pid = running
-                .pid
-                .map(|pid| pid.to_string())
-                .unwrap_or_else(|| "-".to_string());
-            rows.push(format!(
-                "{id} {} {} {pid} {} {}",
-                running.launch.harness,
-                running.launch.model,
-                clock::iso8601(running.launch.started_millis as u128),
-                running.steps
-            ));
+            rows.push(vec![
+                id.clone(),
+                "running".to_string(),
+                running.launch.harness.clone(),
+                running.launch.model.clone(),
+            ]);
             ids.push(id);
         }
     }
     let mut toon = Toon::new();
     toon.section("ps").number("running", rows.len());
-    toon.list("sessions", &rows);
+    toon.table(
+        "sessions",
+        &["id", "state", "harness", "model"],
+        &rows,
+        &[Kind::Text, Kind::Text, Kind::Text, Kind::Text],
+    );
     let help = match ids.first() {
         Some(id) => vec![
             format!("Run `boxr status {id}` to check on a session without waiting"),
@@ -662,6 +662,7 @@ fn render_running(session: &Session, running: &detached::Running) -> String {
     toon.section("session")
         .field("id", &session.id)
         .field("status", "running")
+        .field("state", "running")
         .field("harness", &running.launch.harness)
         .field("model", &running.launch.model)
         .field(
@@ -701,11 +702,16 @@ fn wait(id: &str, timeout: Option<u64>) -> Result<i32> {
             return Ok(report::exit_code(&report));
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(Fail::wait_timeout(
-                format!("session {id} is still running and the wait timed out"),
-                vec![format!("Run `boxr status {id}` to check on it")],
-            )
-            .into());
+            return match detached::state(&home, id)? {
+                State::Running(running) => {
+                    print!("{}", render_running(&session, &running));
+                    Ok(EXIT_OK)
+                }
+                State::Finished(report) => {
+                    print!("{}", report::render(&report, &session));
+                    Ok(report::exit_code(&report))
+                }
+            };
         }
         std::thread::sleep(detached::POLL);
     }
