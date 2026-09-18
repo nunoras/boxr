@@ -198,8 +198,7 @@ Three measures, each labeled:
 Each row carries the requested dimensions, the `currency` the cost is in, `sessions`, `tokens`, `durationMs`, the summed `apiEquivalentCost` and `unpricedSessions`, the count of sessions in that group whose model had no price.
 Cost is grouped by currency as well, because adding amounts from different currencies would mean nothing.
 Every visual view (a Lavish report, a later dashboard) is built on its output rather than querying the ledger itself.
-Queries run on DuckDB reading the JSONL directly.
-A cached DuckDB or Parquet file is added only when a measured need shows up.
+Stats is a direct pass over the summary JSONL: fold each session's records in order, filter by `--since`, group by the requested dimensions plus currency, and emit the TOON table.
 
 ## Evals
 
@@ -272,7 +271,7 @@ A run spends real subscription quota, so the skill always uses the cheapest mode
 1. Launch and ledger: headless and interactive, isolated profiles, subscriptions, live tailing into raw, ATIF JSONL and summary layers, redaction.
    Claude Code, Codex and pi.
    Done means every session launched through boxr is recorded live.
-2. Stats: `--kind`, `boxr outcome`, the inferred kind and outcome pass, `boxr stats` on DuckDB, and import of existing transcripts.
+2. Stats: `--kind`, `boxr outcome`, the inferred kind and outcome pass, `boxr stats` over the summary ledger, and import of existing transcripts.
 3. Evals: scenario format, runner, scoring, noise comparison, and scenario mining with approval.
 4. Prompt skill.
 
