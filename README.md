@@ -44,11 +44,19 @@ cargo install --path .
 ```
 
 That puts `boxr` in `~/.cargo/bin`, which is on `PATH` for a normal Rust install, and `boxr --version` then reports the installed version.
-To install a tagged release instead of a checkout:
+To install from the repository instead of a local checkout:
+
+```
+cargo install --git https://github.com/nunoras/boxr
+```
+
+Once the release is tagged, that becomes:
 
 ```
 cargo install --git https://github.com/nunoras/boxr --tag v0.2.0
 ```
+
+Tagging `v0.2.0` is the captain's release step.
 
 ## Build
 
