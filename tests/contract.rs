@@ -109,6 +109,20 @@ fn an_expired_wait_reports_a_running_turn_and_exits_zero() {
 }
 
 #[test]
+fn wait_reports_a_failed_turn_with_exit_zero() {
+    let mut harness = Harness::new();
+    harness.fail_with("7");
+
+    let id = detach(&harness, "hello");
+    let waited = harness.run(&["wait", &id]);
+    let stdout = stdout_of(&waited);
+
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert_eq!(state_of(&stdout), "failed", "{stdout}");
+}
+
+#[test]
 fn stop_exits_zero() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");

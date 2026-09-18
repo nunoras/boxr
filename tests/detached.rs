@@ -474,8 +474,9 @@ fn a_detached_harness_failure_still_records_a_failed_session() {
     let waited = harness.run(&["wait", &id]);
     let stdout = stdout_of(&waited);
 
-    assert_eq!(waited.status.code(), Some(1), "{stdout}");
+    assert_eq!(waited.status.code(), Some(0), "{stdout}");
     assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("state: failed"), "{stdout}");
     assert!(stdout.contains("exitCode: 7"), "{stdout}");
     assert_eq!(summary_of(&harness.boxr_home(), &id)["status"], "failed");
 }

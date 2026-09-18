@@ -58,7 +58,9 @@ A session stays running while its supervisor is alive, even if a summary line al
 A launch record without a supervisor pid is still starting, not interrupted.
 Only when a supervisor record was written and its pid is dead, and the summary and report are still missing, is the session recorded as interrupted the first time `ps`, `status` or `wait` looks at it, so a killed supervisor still leaves one summarized session.
 `boxr status` reports a running session without blocking and the launch result of a finished one, and `boxr wait` blocks until the result exists.
-`boxr wait` on an expired timeout reports the session as still running and exits zero, because a caller that reads a non-zero exit as a failure cannot tell an expired timeout from a real error.
+`boxr wait` exits zero whenever it can report an outcome, whether the turn ended `ok`, `failed` or `interrupted` or is still `running` because its timeout expired, and keeps a non-zero exit only when boxr cannot do its job at all: an unknown session, or a ledger it cannot read.
+A caller that reads a non-zero exit as a failure cannot otherwise tell a failed turn from a command that never ran, and a failed turn is an outcome to record rather than an error.
+A blocking launch and `boxr resume` are different: they keep mirroring the harness exit code, because their contract is the harness result rather than a report about it.
 The shape of these two commands is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
 `status` is the turn outcome and `state` is the session lifecycle, so a finished session reads `state: finished` with `status: ok`.
 boxr's own lifecycle maps onto the five states rather than adding to them: a session that ended with the harness exiting zero is `finished`, a harness failure is `failed`, and a session ended from outside is `interrupted`.

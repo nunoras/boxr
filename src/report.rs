@@ -87,6 +87,13 @@ pub fn exit_code(report: &Report) -> i32 {
     }
 }
 
+pub fn wait_exit_code(report: &Report) -> i32 {
+    if report.ledger_failed() {
+        return EXIT_LEDGER_FAILED;
+    }
+    EXIT_OK
+}
+
 pub fn write(path: &Path, report: &Report) -> Result<()> {
     let text = serde_json::to_string(report).context("encoding the session result")?;
     write_file_atomically(path, &format!("{text}\n"))

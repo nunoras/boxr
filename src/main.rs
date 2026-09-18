@@ -699,7 +699,7 @@ fn wait(id: &str, timeout: Option<u64>) -> Result<i32> {
     loop {
         if let Some(report) = detached::settled(&home, id)? {
             print!("{}", report::render(&report, &session));
-            return Ok(report::exit_code(&report));
+            return Ok(report::wait_exit_code(&report));
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return match detached::state(&home, id)? {
@@ -709,7 +709,7 @@ fn wait(id: &str, timeout: Option<u64>) -> Result<i32> {
                 }
                 State::Finished(report) => {
                     print!("{}", report::render(&report, &session));
-                    Ok(report::exit_code(&report))
+                    Ok(report::wait_exit_code(&report))
                 }
             };
         }
