@@ -46,7 +46,9 @@ pub enum StreamEvent {
         model: Option<String>,
     },
     FinalMessage {
-        text: String,
+        text: Option<String>,
+        error: Option<String>,
+        limit_hit: bool,
     },
     Ignored,
 }

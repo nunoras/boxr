@@ -6,6 +6,12 @@ pub struct Toon {
     body: String,
 }
 
+#[derive(Clone, Copy)]
+pub enum Kind {
+    Text,
+    Number,
+}
+
 impl Toon {
     pub fn new() -> Toon {
         Toon {
@@ -40,16 +46,12 @@ impl Toon {
         self.body.clone()
     }
 
-    pub fn table(&mut self, name: &str, columns: &[&str], rows: &[Vec<String>]) -> &mut Toon {
-        self.table_with_numbers(name, columns, rows, columns.len())
-    }
-
-    pub fn table_with_numbers(
+    pub fn table(
         &mut self,
         name: &str,
         columns: &[&str],
         rows: &[Vec<String>],
-        first_number: usize,
+        kinds: &[Kind],
     ) -> &mut Toon {
         let _ = writeln!(
             self.body,
@@ -60,13 +62,10 @@ impl Toon {
         for row in rows {
             let cells: Vec<String> = row
                 .iter()
-                .enumerate()
-                .map(|(index, cell)| {
-                    if index < first_number {
-                        scalar(cell)
-                    } else {
-                        cell.to_string()
-                    }
+                .zip(kinds)
+                .map(|(cell, kind)| match kind {
+                    Kind::Text => scalar(cell),
+                    Kind::Number => cell.to_string(),
                 })
                 .collect();
             let _ = writeln!(self.body, "  {}", cells.join(","));

@@ -37,6 +37,8 @@ pub struct LaunchFile {
     pub kind: Option<String>,
     #[serde(default, rename = "kindSource")]
     pub kind_source: Option<String>,
+    #[serde(default, rename = "gitBase")]
+    pub git_base: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +283,9 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         cached_tokens: summary.cached_tokens,
         capture_error: None,
         summary_error: None,
+        error: summary.error.clone(),
+        limit_hit: summary.limit_hit,
+        interrupted: summary.interrupted,
         ledger,
     })
 }
@@ -320,6 +325,9 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         cached_tokens: totals.cached_tokens,
         capture_error: totals.error,
         summary_error: None,
+        error: None,
+        limit_hit: false,
+        interrupted: true,
         ledger: Ledger::Interrupted,
     }
 }
@@ -335,6 +343,10 @@ fn interrupted_exit_code() -> i32 {
 }
 
 fn append_summary(session: &Session, report: &Report) {
+    let git = read_launch(session)
+        .ok()
+        .flatten()
+        .and_then(|launch| crate::git::collect(&launch.cwd, launch.git_base.as_deref()));
     let summary = Summary {
         id: report.id.clone(),
         harness: report.harness.clone(),
@@ -355,6 +367,12 @@ fn append_summary(session: &Session, report: &Report) {
         cached_tokens: report.cached_tokens,
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
+        interrupted: report.interrupted,
+        limit_hit: report.limit_hit,
+        error: report.error.clone(),
+        verdict: None,
+        verdict_note: None,
+        git,
     };
     let _ = ledger::append_summary(&session.summary_path(), &summary);
 }

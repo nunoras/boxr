@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
@@ -17,6 +19,7 @@ pub struct Harness {
     delay_ms: String,
     hang_after: Option<String>,
     fixture: &'static str,
+    commit: Option<String>,
 }
 
 impl Harness {
@@ -38,6 +41,7 @@ impl Harness {
             delay_ms: "5".to_string(),
             hang_after: None,
             fixture: "hello",
+            commit: None,
         }
     }
 
@@ -134,6 +138,42 @@ impl Harness {
         self.fixture = name;
     }
 
+    pub fn commit_with(&mut self, message: &str) {
+        self.commit = Some(message.to_string());
+    }
+
+    pub fn work_dir(&self) -> PathBuf {
+        self.root.path().join("work")
+    }
+
+    pub fn git(&self, args: &[&str]) -> Output {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(self.work_dir())
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    pub fn git_line(&self, args: &[&str]) -> String {
+        let output = self.git(args);
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    pub fn git_init(&self) {
+        self.git(&["init", "-q", "-b", "main"]);
+        self.git(&["config", "user.name", "boxr test"]);
+        self.git(&["config", "user.email", "boxr@example.com"]);
+        self.git(&["config", "commit.gpgsign", "false"]);
+    }
+
     pub fn harness_transcript_lines(&self) -> usize {
         let projects = self.root.path().join("claude").join("projects");
         fs::read_dir(projects)
@@ -144,6 +184,15 @@ impl Harness {
             .filter_map(|file| fs::read_to_string(file.path()).ok())
             .map(|text| text.lines().count())
             .sum()
+    }
+
+    fn search_path(&self, bin_dir: Option<&Path>) -> OsString {
+        let Some(bin_dir) = bin_dir else {
+            return self.root.path().join("empty").into_os_string();
+        };
+        let parent = std::env::var_os("PATH").unwrap_or_default();
+        env::join_paths(std::iter::once(bin_dir.to_path_buf()).chain(env::split_paths(&parent)))
+            .expect("joining PATH")
     }
 
     pub fn run(&self, args: &[&str]) -> Output {
@@ -192,12 +241,7 @@ impl Harness {
             .env("BOXR_FAKE_CLAUDE_EXIT", &self.exit_code)
             .env("BOXR_FAKE_CLAUDE_DELAY_MS", &self.delay_ms)
             .env("BOXR_FAKE_CLAUDE_PROMPT", &self.prompt_file)
-            .env(
-                "PATH",
-                bin_dir
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| self.root.path().join("empty")),
-            );
+            .env("PATH", self.search_path(bin_dir));
         if !self.args_file.as_os_str().is_empty() {
             command.env("BOXR_FAKE_CLAUDE_ARGS", &self.args_file);
         }
@@ -208,6 +252,11 @@ impl Harness {
             command
                 .env("BOXR_FAKE_CLAUDE_HANG_AFTER", lines)
                 .env("BOXR_FAKE_CLAUDE_PID", self.pid_file());
+        }
+        if let Some(message) = &self.commit {
+            command
+                .env("BOXR_FAKE_CLAUDE_COMMIT", message)
+                .env("BOXR_FAKE_CLAUDE_GIT", git_exe());
         }
         command
     }
@@ -246,6 +295,15 @@ pub fn fake_name() -> &'static str {
 
 pub fn fake_claude() -> PathBuf {
     example_binary("fake-claude")
+}
+
+pub fn git_exe() -> PathBuf {
+    let name = if cfg!(windows) { "git.exe" } else { "git" };
+    let path = std::env::var_os("PATH").expect("PATH");
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH")
 }
 
 pub fn example_binary(name: &str) -> PathBuf {
@@ -308,12 +366,28 @@ pub fn normalized_lines(path: &Path) -> Vec<Value> {
 }
 
 pub fn summary_of(home: &Path, id: &str) -> Value {
-    fs::read_to_string(home.join("summary.jsonl"))
-        .expect("summary ledger")
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("a json line"))
-        .find(|value| value["id"] == id)
-        .expect("a summary line for the session")
+    let text = fs::read_to_string(home.join("summary.jsonl")).expect("summary ledger");
+    let mut summary: Option<Value> = None;
+    for line in text.lines() {
+        let value: Value = serde_json::from_str(line).expect("a json line");
+        if value["id"] != id {
+            continue;
+        }
+        if value.get("status").is_some() {
+            summary = Some(value);
+            continue;
+        }
+        let Some(summary) = summary.as_mut() else {
+            continue;
+        };
+        let object = summary.as_object_mut().expect("a summary object");
+        for (key, field) in value.as_object().expect("an update object") {
+            if key != "id" {
+                object.insert(key.clone(), field.clone());
+            }
+        }
+    }
+    summary.expect("a summary line for the session")
 }
 
 pub fn sources_of(steps: &[Value]) -> Vec<&str> {

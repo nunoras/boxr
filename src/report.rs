@@ -50,6 +50,12 @@ pub struct Report {
     pub cached_tokens: u64,
     pub capture_error: Option<String>,
     pub summary_error: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub limit_hit: bool,
+    #[serde(default)]
+    pub interrupted: bool,
     pub ledger: Ledger,
 }
 
@@ -110,6 +116,15 @@ pub fn render(report: &Report, session: &Session) -> String {
             "message",
             &one_line(report.final_message.as_deref().unwrap_or(""), MESSAGE_LIMIT),
         );
+    if report.interrupted {
+        toon.number("interrupted", true);
+    }
+    if report.limit_hit {
+        toon.number("limitHit", true);
+    }
+    if let Some(error) = &report.error {
+        toon.field("error", &one_line(error, MESSAGE_LIMIT));
+    }
     let ledger = toon
         .section("ledger")
         .field(

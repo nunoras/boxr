@@ -4,6 +4,7 @@ mod clock;
 mod config;
 mod detached;
 mod fail;
+mod git;
 mod harness;
 mod home;
 #[cfg(windows)]
@@ -22,8 +23,8 @@ use config::Config;
 use detached::{LaunchFile, State};
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
-use ledger::Summary;
-use output::{one_line, Toon, MESSAGE_LIMIT};
+use ledger::{Summary, SummaryUpdate};
+use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -140,6 +141,24 @@ enum Command {
         #[arg(value_name = "PROMPT")]
         prompt: String,
     },
+    /// Record the caller's verdict on a session, or check whether its commits were reverted
+    ///
+    /// Record a verdict with `boxr outcome <id> success|partial|failed [--note <text>]`.
+    /// Check whether the commits a session made remain reachable on a local branch with
+    /// `boxr outcome --check-reverted <id>`; unreachable commits get recorded as reverted.
+    Outcome {
+        #[arg(long)]
+        check_reverted: bool,
+
+        #[arg(value_name = "ID")]
+        id: Option<String>,
+
+        #[arg(value_name = "VERDICT")]
+        verdict: Option<String>,
+
+        #[arg(long, value_name = "NOTE")]
+        note: Option<String>,
+    },
     Stats {
         #[arg(long, value_name = "DIMS")]
         by: String,
@@ -254,6 +273,12 @@ fn dispatch() -> Result<i32> {
         Some(Command::Tail { id }) => tail(&id),
         Some(Command::Stop { id }) => stop(&id),
         Some(Command::Resume { id, prompt }) => resume(&id, &prompt),
+        Some(Command::Outcome {
+            check_reverted,
+            id,
+            verdict,
+            note,
+        }) => outcome(check_reverted, id, verdict, note),
         Some(Command::Stats { by, since }) => stats(&home, &by, &since),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
@@ -340,6 +365,7 @@ fn detach(
             resumed_from: None,
             kind: request.kind.clone(),
             kind_source: request.kind_source.clone(),
+            git_base: git::head(&request.cwd),
         },
     )?;
     let mut supervisor = match detached::spawn_supervisor(&session) {
@@ -446,7 +472,12 @@ fn account_list(home: &Path) -> Result<i32> {
         })
         .collect();
     let mut toon = Toon::new();
-    toon.table("accounts", &["harness", "name", "dir"], &rows);
+    toon.table(
+        "accounts",
+        &["harness", "name", "dir"],
+        &rows,
+        &[Kind::Text, Kind::Text, Kind::Text],
+    );
     let help = if profiles.is_empty() {
         vec!["Run `boxr account add --harness claude --name work` to create a profile".to_string()]
     } else {
@@ -909,6 +940,30 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     if let Some(parent) = &summary.resumed_from {
         toon.field("resumedFrom", parent);
     }
+    if let Some(verdict) = &summary.verdict {
+        toon.field("verdict", verdict);
+    }
+    if let Some(note) = &summary.verdict_note {
+        toon.field("verdictNote", &one_line(note, MESSAGE_LIMIT));
+    }
+    if summary.interrupted {
+        toon.number("interrupted", true);
+    }
+    if summary.limit_hit {
+        toon.number("limitHit", true);
+    }
+    if let Some(error) = &summary.error {
+        toon.field("error", &one_line(error, MESSAGE_LIMIT));
+    }
+    if let Some(evidence) = &summary.git {
+        toon.section("git")
+            .field("repo", &evidence.repo.display().to_string())
+            .number("commits", evidence.commits.len())
+            .number("files", evidence.files.len());
+        if let Some(reverted) = &evidence.reverted {
+            toon.number("reverted", reverted.len());
+        }
+    }
     toon.field("start", &summary.start)
         .field("end", &summary.end)
         .number("durationMs", summary.duration_ms)
@@ -917,6 +972,150 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
         .number("promptTokens", summary.prompt_tokens)
         .number("completionTokens", summary.completion_tokens)
         .number("cachedTokens", summary.cached_tokens);
+}
+
+const VERDICTS: &[&str] = &["success", "partial", "failed"];
+
+fn outcome(
+    check_reverted: bool,
+    id: Option<String>,
+    verdict: Option<String>,
+    note: Option<String>,
+) -> Result<i32> {
+    let home = home::boxr_home()?;
+    let id = id.ok_or_else(|| {
+        anyhow::Error::from(Fail::usage(
+            "no session id given",
+            vec!["Run `boxr outcome <id> success|partial|failed --note \"...\"`".to_string()],
+        ))
+    })?;
+    if check_reverted {
+        if verdict.is_some() || note.is_some() {
+            return Err(Fail::usage(
+                "--check-reverted takes no verdict or note",
+                vec![format!("Run `boxr outcome --check-reverted {id}`")],
+            )
+            .into());
+        }
+        return check_commits(&home, &id);
+    }
+    let verdict = verdict.ok_or_else(|| {
+        anyhow::Error::from(Fail::usage(
+            "no verdict given",
+            vec![
+                format!("Run `boxr outcome {id} success|partial|failed`"),
+                format!("Valid verdicts: {}", VERDICTS.join(", ")),
+            ],
+        ))
+    })?;
+    if !VERDICTS.contains(&verdict.as_str()) {
+        return Err(Fail::usage(
+            format!("unknown verdict `{verdict}`"),
+            vec![format!("Valid verdicts: {}", VERDICTS.join(", "))],
+        )
+        .into());
+    }
+    ledger::read_summary(&home, &id).map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec!["Run `boxr show <id>` with an id printed by a boxr launch".to_string()],
+        )
+    })?;
+    let displayed_note = note.clone();
+    let update = SummaryUpdate {
+        id: id.clone(),
+        verdict: Some(verdict.clone()),
+        verdict_note: Some(note),
+        git: None,
+    };
+    ledger::append_summary_update(&home.join(ledger::SUMMARY_FILE), &update).map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec![format!("Run `boxr show {id}` to check the session")],
+        )
+    })?;
+
+    let mut toon = Toon::new();
+    toon.section("outcome")
+        .field("id", &id)
+        .field("verdict", &verdict);
+    if let Some(note) = &displayed_note {
+        toon.field("note", &one_line(note, MESSAGE_LIMIT));
+    }
+    toon.list(
+        "help",
+        &[
+            format!("Run `boxr show {id}` to read the session summary"),
+            "Run `boxr stats --by verdict --since 7d` to group sessions by verdict".to_string(),
+        ],
+    );
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn check_commits(home: &Path, id: &str) -> Result<i32> {
+    let summary = ledger::read_summary(home, id).map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec!["Run `boxr show <id>` with an id printed by a boxr launch".to_string()],
+        )
+    })?;
+    let mut evidence = summary.git.clone().ok_or_else(|| {
+        Fail::usage(
+            format!("session {id} recorded no git evidence"),
+            vec![format!(
+                "Run `boxr show {id}` to check what the session recorded"
+            )],
+        )
+    })?;
+    let commits = evidence.commits.clone();
+    let reverted =
+        git::reverted_commits(&evidence.repo, &commits).map_err(outcome_git_error(id))?;
+    let unknown: Vec<String> = commits
+        .iter()
+        .filter(|commit| !reverted.contains(*commit))
+        .cloned()
+        .collect();
+    evidence.reverted = Some(reverted.clone());
+    let update = SummaryUpdate {
+        id: id.to_string(),
+        verdict: None,
+        verdict_note: None,
+        git: Some(evidence),
+    };
+    ledger::append_summary_update(&home.join(ledger::SUMMARY_FILE), &update).map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec![format!("Run `boxr show {id}` to check the session")],
+        )
+    })?;
+
+    let mut toon = Toon::new();
+    toon.section("reverts")
+        .field("id", id)
+        .number("commits", commits.len());
+    toon.list("reverted", &reverted);
+    toon.list("unknown", &unknown);
+    toon.list(
+        "help",
+        &[
+            format!("Run `boxr show {id}` to read the session summary"),
+            "Run `boxr stats --by verdict --since 7d` to group sessions by verdict".to_string(),
+        ],
+    );
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn outcome_git_error(id: &str) -> impl Fn(anyhow::Error) -> anyhow::Error {
+    let id = id.to_string();
+    move |error: anyhow::Error| {
+        Fail::usage(
+            format!("cannot check the commits of session {id}: {error:#}"),
+            vec![format!("Run `boxr show {id}` to check the session")],
+        )
+        .into()
+    }
 }
 
 fn stats(home: &Path, by: &str, since: &str) -> Result<i32> {

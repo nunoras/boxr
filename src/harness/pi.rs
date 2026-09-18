@@ -97,7 +97,11 @@ fn final_message(value: &Value) -> Option<StreamEvent> {
         return None;
     }
     let text = joined_text(message.get("content")?.as_array()?);
-    (!text.is_empty()).then_some(StreamEvent::FinalMessage { text })
+    (!text.is_empty()).then_some(StreamEvent::FinalMessage {
+        text: Some(text),
+        error: None,
+        limit_hit: false,
+    })
 }
 
 fn user_entry(entry: &Value, message: &Value) -> Option<TranscriptEntry> {

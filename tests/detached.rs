@@ -334,6 +334,30 @@ fn stopping_a_detached_session_ends_the_harness_and_records_an_interruption() {
 }
 
 #[test]
+fn recovering_a_killed_supervisor_records_git_evidence() {
+    let mut harness = Harness::new();
+    harness.git_init();
+    fs::write(harness.work_dir().join("baseline.txt"), "baseline\n").expect("baseline file");
+    harness.git(&["add", "-A"]);
+    harness.git(&["commit", "-q", "-m", "baseline"]);
+    fs::write(harness.work_dir().join("session.txt"), "session work\n").expect("session file");
+    harness.commit_with("session work by the fake harness");
+    harness.use_fixture("tools");
+    harness.hang_after(9);
+
+    let id = detach(&harness, "review");
+    harness.harness_pid();
+    let commit = harness.git_line(&["rev-parse", "HEAD"]);
+    let pid = supervisor_pid(&harness, &id);
+    kill_supervisor(pid, true);
+
+    assert!(await_status(&harness, &id, "interrupted").contains("status: interrupted"));
+    let evidence = &summary_of(&harness.boxr_home(), &id)["git"];
+    assert_eq!(evidence["commits"], serde_json::json!([commit]));
+    assert_eq!(evidence["files"], serde_json::json!(["session.txt"]));
+}
+
+#[test]
 fn killing_the_supervisor_kills_the_harness_and_marks_the_session_interrupted() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");
