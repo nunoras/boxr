@@ -207,7 +207,7 @@ fn outcome_records_the_caller_verdict_and_note() {
     let stats = harness.run(&["stats", "--by", "verdict", "--since", "7d"]);
     let stats_stdout = stdout_of(&stats);
     assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
-    assert!(stats_stdout.contains("success,1,"), "{stats_stdout}");
+    assert!(stats_stdout.contains("success,USD,1,"), "{stats_stdout}");
 }
 
 #[test]
@@ -411,12 +411,14 @@ fn stats_groups_sessions_by_verdict_and_limit_hit() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(
-        stdout.contains("stats[3]{verdict,limitHit,sessions,tokens,durationMs}:"),
+        stdout.contains(
+            "stats[3]{verdict,limitHit,currency,sessions,tokens,durationMs,apiEquivalentCost,unpricedSessions}:"
+        ),
         "{stdout}"
     );
-    assert!(stdout.contains("none,false,1,"), "{stdout}");
-    assert!(stdout.contains("success,true,1,"), "{stdout}");
-    assert!(stdout.contains("failed,false,1,"), "{stdout}");
+    assert!(stdout.contains("none,false,unknown,1,"), "{stdout}");
+    assert!(stdout.contains("success,true,unknown,1,"), "{stdout}");
+    assert!(stdout.contains("failed,false,unknown,1,"), "{stdout}");
 }
 
 #[test]
@@ -432,12 +434,14 @@ fn stats_groups_sessions_by_status_and_interruption() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(
-        stdout.contains("stats[3]{status,interrupted,sessions,tokens,durationMs}:"),
+        stdout.contains(
+            "stats[3]{status,interrupted,currency,sessions,tokens,durationMs,apiEquivalentCost,unpricedSessions}:"
+        ),
         "{stdout}"
     );
-    assert!(stdout.contains("ok,false,1,"), "{stdout}");
-    assert!(stdout.contains("interrupted,true,2,"), "{stdout}");
-    assert!(stdout.contains("failed,false,1,"), "{stdout}");
+    assert!(stdout.contains("ok,false,unknown,1,"), "{stdout}");
+    assert!(stdout.contains("interrupted,true,unknown,2,"), "{stdout}");
+    assert!(stdout.contains("failed,false,unknown,1,"), "{stdout}");
 }
 
 #[test]
