@@ -1,11 +1,10 @@
 use crate::cost;
 use crate::fail::{EXIT_LEDGER_FAILED, EXIT_OK, EXIT_SESSION_FAILED};
-use crate::home::restrict_file;
+use crate::home::write_file_atomically;
 use crate::output::{one_line, Toon, MESSAGE_LIMIT};
 use crate::session::Session;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,8 +89,7 @@ pub fn exit_code(report: &Report) -> i32 {
 
 pub fn write(path: &Path, report: &Report) -> Result<()> {
     let text = serde_json::to_string(report).context("encoding the session result")?;
-    fs::write(path, format!("{text}\n")).with_context(|| format!("writing {}", path.display()))?;
-    restrict_file(path)
+    write_file_atomically(path, &format!("{text}\n"))
 }
 
 pub fn render(report: &Report, session: &Session) -> String {
