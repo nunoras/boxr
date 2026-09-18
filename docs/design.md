@@ -62,7 +62,7 @@ Only when a supervisor record was written and its pid is dead, and the summary a
 A caller that reads a non-zero exit as a failure cannot otherwise tell a failed turn from a command that never ran, and a failed turn is an outcome to record rather than an error.
 `boxr resume` reports a turn the same way, so it exits zero once it has recorded the continuation, including when the harness turn failed or the ledger could not be written.
 A blocking launch is the one that differs: it mirrors the harness exit code, because its contract is the harness result rather than a report about it.
-The shape of these two commands is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
+The shape of `boxr ps`, `boxr status` and `boxr wait` is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
 `status` is the turn outcome and `state` is the session lifecycle, so a finished session reads `state: finished` with `status: ok`.
 boxr's own lifecycle maps onto the five states rather than adding to them: a session that ended with the harness exiting zero is `finished`, a harness failure is `failed`, and a session ended from outside is `interrupted`.
 `stopped` is never printed, because `boxr stop` ends a session from outside and that is already `interrupted`.
