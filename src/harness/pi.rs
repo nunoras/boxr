@@ -1,5 +1,8 @@
 use super::json::{joined_reasoning, joined_text, number_at, text_at};
-use super::{Harness, HarnessCommand, HarnessSession, LaunchRequest, StreamEvent, TranscriptEntry};
+use super::{
+    Harness, HarnessCommand, HarnessSession, LaunchMode, LaunchRequest, StreamEvent,
+    TranscriptEntry,
+};
 use crate::atif::{Metrics, ObservationResult, Step, ToolCall};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
@@ -14,6 +17,10 @@ impl Harness for Pi {
     }
 
     fn command(&self, request: &LaunchRequest, session: &HarnessSession) -> Result<HarnessCommand> {
+        let session_id = match &request.mode {
+            LaunchMode::Resume { harness_session_id } => harness_session_id.clone(),
+            LaunchMode::Fresh => session.session_id.clone(),
+        };
         let mut args = vec![
             "--print".to_string(),
             "--mode".to_string(),
@@ -21,7 +28,7 @@ impl Harness for Pi {
             "--model".to_string(),
             request.model.clone(),
             "--session-id".to_string(),
-            session.session_id.clone(),
+            session_id,
             "--session-dir".to_string(),
             session.dir.display().to_string(),
         ];
@@ -96,12 +103,38 @@ fn final_message(value: &Value) -> Option<StreamEvent> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return None;
     }
-    let text = joined_text(message.get("content")?.as_array()?);
-    (!text.is_empty()).then_some(StreamEvent::FinalMessage {
-        text: Some(text),
-        error: None,
-        limit_hit: false,
-    })
+    let text = message
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|parts| joined_text(parts))
+        .filter(|text| !text.is_empty());
+    let stop_reason = text_at(message, "stopReason");
+    let error_message = text_at(message, "errorMessage");
+    let limit_hit = limit_hit(stop_reason.as_deref(), error_message.as_deref());
+    let error = match (stop_reason.as_deref(), error_message) {
+        (_, Some(message)) => Some(message),
+        (Some("error"), None) => Some("error".to_string()),
+        _ => None,
+    };
+    match (text.as_ref(), error.is_some(), limit_hit) {
+        (None, false, false) => None,
+        _ => Some(StreamEvent::FinalMessage {
+            text,
+            error,
+            limit_hit,
+        }),
+    }
+}
+
+fn limit_hit(stop_reason: Option<&str>, error_message: Option<&str>) -> bool {
+    let _ = stop_reason;
+    let message = error_message.unwrap_or("").to_ascii_lowercase();
+    message.contains("usage limit")
+        || message.contains("rate limit")
+        || message.contains("quota")
+        || message.contains("gousagelimit")
+        || message.contains("limit reached")
+        || message.contains("limit exceeded")
 }
 
 fn user_entry(entry: &Value, message: &Value) -> Option<TranscriptEntry> {

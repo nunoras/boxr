@@ -836,10 +836,10 @@ fn resume(id: &str, prompt: &str) -> Result<i32> {
         )?),
         None => None,
     };
-    let parent = run::harness_session_of(&Session::open(&home, id));
+    let origin = run::origin_session(&home, id)?;
     let from_bytes = run::transcript_size(
         adapter.as_ref(),
-        &parent,
+        &run::harness_session_of(&origin),
         &harness_session_id,
         profile.as_deref(),
     )

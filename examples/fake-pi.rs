@@ -91,11 +91,15 @@ fn main() -> ExitCode {
         }
     };
 
-    let transcript_path = session_dir.join(format!("{file_timestamp}_{session_id}.jsonl"));
     if let Err(error) = fs::create_dir_all(&session_dir) {
         eprintln!("cannot create the session directory: {error}");
         return ExitCode::from(97);
     }
+    let suffix = format!("_{session_id}.jsonl");
+    let existing = existing_session_file(&session_dir, &suffix);
+    let continuing = existing.is_some();
+    let transcript_path = existing
+        .unwrap_or_else(|| session_dir.join(format!("{file_timestamp}_{session_id}.jsonl")));
 
     let delay = Duration::from_millis(
         env::var(DELAY_ENV)
@@ -104,26 +108,27 @@ fn main() -> ExitCode {
             .unwrap_or(5),
     );
 
-    let mut transcript_file = match fs::File::create(&transcript_path) {
+    let mut transcript_file = match open_transcript(&transcript_path, continuing) {
         Ok(file) => file,
         Err(error) => {
-            eprintln!("cannot create the transcript: {error}");
+            eprintln!("cannot open the transcript: {error}");
             return ExitCode::from(97);
         }
     };
 
     let mut stdout = std::io::stdout();
-    let mut transcript_lines = transcript.lines();
+    let transcript_lines = transcript_entries(&transcript, continuing);
+    let mut transcript_lines = transcript_lines.into_iter();
     for line in stream.lines() {
         if let Some(entry) = transcript_lines.next() {
-            append(&mut transcript_file, entry);
+            append(&mut transcript_file, &entry);
         }
         let _ = writeln!(stdout, "{line}");
         let _ = stdout.flush();
         sleep(delay);
     }
     for entry in transcript_lines {
-        append(&mut transcript_file, entry);
+        append(&mut transcript_file, &entry);
         sleep(delay);
     }
 
@@ -153,4 +158,42 @@ fn header_value(stream: &str, key: &str) -> Option<String> {
 fn append(file: &mut fs::File, entry: &str) {
     let _ = writeln!(file, "{entry}");
     let _ = file.flush();
+}
+
+fn existing_session_file(session_dir: &PathBuf, suffix: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(session_dir).ok()?;
+    let mut matches: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(suffix))
+        })
+        .collect();
+    matches.sort();
+    matches.pop()
+}
+
+fn open_transcript(path: &PathBuf, continuing: bool) -> std::io::Result<fs::File> {
+    if continuing {
+        fs::OpenOptions::new().append(true).open(path)
+    } else {
+        fs::File::create(path)
+    }
+}
+
+fn transcript_entries(transcript: &str, continuing: bool) -> Vec<String> {
+    transcript
+        .lines()
+        .filter(|line| {
+            if !continuing {
+                return true;
+            }
+            match serde_json::from_str::<Value>(line) {
+                Ok(value) => value.get("type").and_then(Value::as_str) == Some("message"),
+                Err(_) => true,
+            }
+        })
+        .map(str::to_string)
+        .collect()
 }

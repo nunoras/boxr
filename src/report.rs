@@ -69,7 +69,7 @@ pub struct Report {
 
 impl Report {
     pub fn succeeded(&self) -> bool {
-        self.exit_code == 0
+        self.status == "ok"
     }
 
     pub fn ledger_failed(&self) -> bool {
