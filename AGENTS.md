@@ -18,6 +18,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Account profiles live at `accounts/<harness>/<name>` under the boxr home (`src/account.rs`). boxr only ever sets the config-dir override and never touches the user's own harness config.
 - API-equivalent cost is estimated per session from `currency` and `prices` in config (`src/cost.rs`), recorded in the summary as `apiEquivalentCost` plus `currency`, and summed by `boxr stats`; a model missing from the table records null, never zero, and stats counts those as `unpricedSessions`.
 - Output is axi-style TOON on stdout with `help[]` next-step lines; exit codes are defined in `src/fail.rs`.
+  `boxr ps`, `boxr status` and `boxr wait` are a fixed machine contract other tools read, locked by `tests/contract.rs` and by depot's `docs/boxr-contract.md`: `ps` prints `sessions[N]{id,state,harness,model}:`, `status` prints `state:` from `running|finished|stopped|interrupted|failed`, and `wait` prints `status:` from `ok|failed|interrupted|running` and exits zero for every outcome, keeping a non-zero exit only for an unknown session or an unreadable ledger.
+  A blocking launch and `boxr resume` are different: they mirror the harness exit code, because their contract is the harness result rather than a report about it.
 - No comments in code, per the repo's coding standard.
 
 ## Maintaining this file

@@ -15,6 +15,9 @@ Headless Claude Code and pi launches run and land in the raw ledger under the bo
 pi models are given in pi's `provider/id` form, for example `--harness pi --model xai/grok-4.5`, and `--effort` becomes pi's thinking level.
 A launch records itself under the boxr home as it starts, so `boxr ps` lists running sessions, `boxr status <id>` reports one without blocking, `boxr wait <id>` blocks until it ends and prints the result a blocking launch would have printed, `boxr tail <id>` streams the normalized ledger as it is appended, and `boxr stop <id>` ends a session.
 `--detach` returns the session id immediately and keeps the session running under a boxr supervisor process; killing that supervisor kills the harness with it and records the session as interrupted.
+Those commands print a shape other tools read: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status <id>` prints `state:` as one of `running`, `finished`, `stopped`, `interrupted` or `failed`, and `boxr wait <id>` prints the turn outcome as `status:` as `ok`, `failed`, `interrupted` or `running`.
+`boxr wait` exits zero whenever it can report one of those outcomes, including an expired `--timeout`, and `boxr resume` exits zero once it has recorded the continuation, even when the harness turn failed or the ledger could not be written.
+Both only exit non-zero when boxr cannot run at all: an unknown session or records it cannot read.
 `boxr resume <id> "<prompt>"` continues a finished session with a new prompt, using the same harness, model, effort and profile, and records the continuation as its own session linked to the original.
 While a session runs, boxr follows the harness transcript and writes the normalized ledger live: `normalized.jsonl` is a header line, one ATIF step per line, and a closing line of final metrics.
 Each finished session appends one line to `summary.jsonl` in the boxr home.
@@ -33,6 +36,27 @@ Account profiles are isolated per-harness config directories boxr owns, under `a
 `--account work` on a launch points the harness at that profile; boxr never reads or writes the user's normal harness setup.
 Everything else in the design is still ahead.
 The design lives in [docs/design.md](docs/design.md).
+
+## Install
+
+```
+cargo install --path .
+```
+
+That puts `boxr` in `~/.cargo/bin`, which is on `PATH` for a normal Rust install, and `boxr --version` then reports the installed version.
+To install from the repository instead of a local checkout:
+
+```
+cargo install --git https://github.com/nunoras/boxr
+```
+
+Once the release is tagged, that becomes:
+
+```
+cargo install --git https://github.com/nunoras/boxr --tag v0.2.0
+```
+
+Tagging `v0.2.0` is the captain's release step.
 
 ## Build
 
