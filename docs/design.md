@@ -71,6 +71,9 @@ boxr's own lifecycle maps onto the five states rather than adding to them: a tur
 `stopped` is never printed, because `boxr stop` ends a session from outside and that is already `interrupted`.
 `boxr tail` streams the normalized ledger as it is appended.
 `boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
+`boxr serve [--port N]` exposes the same read surface over HTTP as JSON so a fleet view on another machine can poll this host (default port 4035, bind all interfaces).
+The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`; anything that would mutate the ledger is refused with 405.
+The ledger is still written only by the launch and outcome paths on this machine.
 The harness dies with boxr: on Linux it is given `PR_SET_PDEATHSIG`, and on Windows it joins a job object that kills it when boxr exits.
 If that guard cannot be set up, the launch fails and any spawned harness is killed rather than left running unprotected.
 
