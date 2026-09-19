@@ -35,6 +35,9 @@ The harness runs non-interactively and boxr reads its structured event stream.
 By default the call blocks and prints a short TOON result: status, session id, trimmed final message, tokens, cost, duration, and next-step `help[]` lines.
 `--detach` returns the session id immediately and the session keeps running in the background under boxr.
 Detached sessions are managed with `boxr ps`, `boxr wait <id>` (optional timeout), `boxr status <id>`, `boxr tail <id>` and `boxr stop <id>`.
+`boxr --remote <host> ...` forwards a headless launch over ssh: it probes `boxr --version` on the host, requires the same version as the local binary, runs `boxr --detach` there with the same harness, model, effort, account and kind, prints the remote session id, and exits.
+The session is recorded only in the remote ledger; there is no cross-machine store.
+Follow-up reads go through the remote host (`ssh`, or `boxr serve` on that machine).
 `boxr resume <id> "<prompt>"` continues a finished session.
 If boxr crashes, the harness process is killed rather than orphaned, and the session is marked interrupted.
 
