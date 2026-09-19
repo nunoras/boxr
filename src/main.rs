@@ -12,6 +12,7 @@ mod home;
 mod job;
 mod ledger;
 mod output;
+mod remote;
 mod report;
 mod run;
 mod session;
@@ -67,6 +68,9 @@ struct Cli {
 
     #[arg(long)]
     detach: bool,
+
+    #[arg(long, value_name = "HOST")]
+    remote: Option<String>,
 
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
@@ -304,6 +308,20 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
     let effort = cli.effort.or(config.defaults.effort.clone());
     let account = cli.account.or(config.defaults.account.clone());
     let kind = declared_kind(cli.kind.as_deref(), config)?;
+    let kind_source = cli.kind.map(|_| "declared".to_string());
+
+    if let Some(host) = cli.remote.as_deref() {
+        let _ = adapter_for(&harness_id)?;
+        return remote::launch(&remote::RemoteLaunch {
+            host: host.to_string(),
+            harness: harness_id,
+            model,
+            effort,
+            account,
+            kind,
+            prompt,
+        });
+    }
 
     let adapter = adapter_for(&harness_id)?;
 
@@ -320,7 +338,7 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         cwd,
         mode: LaunchMode::Fresh,
         kind,
-        kind_source: cli.kind.map(|_| "declared".to_string()),
+        kind_source,
     };
 
     if cli.detach {

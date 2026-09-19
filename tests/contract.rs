@@ -4,7 +4,7 @@ use common::*;
 
 const MINIMUM_VERSION: (u64, u64, u64) = (0, 2, 0);
 const REQUIRED_COMMANDS: [&str; 5] = ["ps", "status", "wait", "stop", "resume"];
-const REQUIRED_FLAGS: [&str; 1] = ["--detach"];
+const REQUIRED_FLAGS: [&str; 2] = ["--detach", "--remote"];
 const DEPOT_STATES: [&str; 5] = ["running", "finished", "stopped", "interrupted", "failed"];
 
 fn detach(harness: &Harness, prompt: &str) -> String {
