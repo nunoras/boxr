@@ -14,6 +14,7 @@ mod ledger;
 mod output;
 mod report;
 mod run;
+mod serve;
 mod session;
 mod skill;
 mod stats;
@@ -167,6 +168,10 @@ enum Command {
         #[arg(long, value_name = "WINDOW")]
         since: String,
     },
+    Serve {
+        #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_PORT)]
+        port: u16,
+    },
     #[command(name = "__supervise", hide = true)]
     Supervise {
         #[arg(value_name = "ID")]
@@ -281,6 +286,7 @@ fn dispatch() -> Result<i32> {
             note,
         }) => outcome(check_reverted, id, verdict, note),
         Some(Command::Stats { by, since }) => stats(&home, &by, &since),
+        Some(Command::Serve { port }) => serve::run(port),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
     }
