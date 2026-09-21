@@ -11,7 +11,7 @@ use crate::session::Session;
 use anyhow::{anyhow, Context, Result};
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +19,7 @@ use std::sync::{Arc, Condvar, Mutex, Once, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 const STOP_POLL: Duration = Duration::from_millis(50);
+const STDERR_TAIL_BYTES: u64 = 4096;
 
 pub struct Launch {
     pub session: Session,
@@ -346,6 +347,10 @@ pub fn headless(
                     hit_limit = true;
                 }
             }
+            StreamEvent::Recovered => {
+                harness_error = None;
+                hit_limit = false;
+            }
             StreamEvent::Ignored => {}
         }
     }
@@ -378,6 +383,11 @@ pub fn headless(
     let exit_code = exit_code_of(&status);
     let duration_ms = started.elapsed().as_millis() as u64;
     let interrupted = stop.was_requested() || stopped_externally(&status);
+    let stderr_tail = match &harness_error {
+        Some(_) => None,
+        None if !interrupted && !status.success() => read_stderr_tail(&stderr_path),
+        None => None,
+    };
     let git_evidence = git::collect(&request.cwd, git_base.as_deref());
     let pricing = cost::calculate(
         &session.home,
@@ -452,6 +462,7 @@ pub fn headless(
         capture_error: tally.error,
         summary_error: summary_error.clone(),
         error: harness_error,
+        stderr_tail,
         limit_hit: hit_limit,
         interrupted,
         ledger,
@@ -467,6 +478,21 @@ pub fn headless(
         summary_error,
         ..report
     })
+}
+
+fn read_stderr_tail(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(STDERR_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    if start > 0 {
+        let newline = bytes.iter().position(|byte| *byte == b'\n')?;
+        bytes.drain(..=newline);
+    }
+    let text = String::from_utf8_lossy(&bytes).trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 fn status_of(status: &ExitStatus, interrupted: bool, harness_failed: bool) -> &'static str {

@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"44444444-5555-4666-8777-888888888888","timestamp":"2026-09-20T11:00:00.000Z","cwd":"/work/repo"}
+{"type":"agent_start"}
+{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-responses","provider":"opencode-go","model":"grok-4.6","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","timestamp":2000,"errorMessage":"OpenAI API error (429): {\"type\":\"GoUsageLimitError\",\"message\":\"Weekly usage limit reached. Resets in 2 days.\"}"}}
+{"type":"auto_retry_start","attempt":3,"maxAttempts":3,"delayMs":400,"errorMessage":"OpenAI API error (429)"}
+{"type":"auto_retry_end","success":false,"attempt":3,"finalError":"OpenAI API error (429): Weekly usage limit reached. Resets in 2 days."}
+{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-responses","provider":"opencode-go","model":"grok-4.6","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","timestamp":2001,"errorMessage":"terminal error after exhausted retries"}}
+{"type":"agent_end"}
+{"type":"agent_settled"}

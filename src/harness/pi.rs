@@ -59,6 +59,7 @@ impl Harness for Pi {
                 })
                 .unwrap_or(StreamEvent::Ignored),
             Some("message_end") => final_message(&value).unwrap_or(StreamEvent::Ignored),
+            Some("auto_retry_end") => retry_recovered(&value),
             _ => StreamEvent::Ignored,
         }
     }
@@ -123,6 +124,13 @@ fn final_message(value: &Value) -> Option<StreamEvent> {
             error,
             limit_hit,
         }),
+    }
+}
+
+fn retry_recovered(value: &Value) -> StreamEvent {
+    match value.get("success").and_then(Value::as_bool) {
+        Some(true) => StreamEvent::Recovered,
+        _ => StreamEvent::Ignored,
     }
 }
 

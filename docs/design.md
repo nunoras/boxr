@@ -68,6 +68,7 @@ A caller that reads a non-zero exit as a failure cannot otherwise tell a failed 
 `boxr resume` reports a turn the same way, so it exits zero once it has recorded the continuation, including when the harness turn failed or the ledger could not be written.
 A blocking launch is the one that differs: its process exit follows the turn outcome, not only the harness process exit code, because its contract is the harness result rather than a report about it.
 It exits non-zero when the turn is `failed` or `interrupted`, including when the harness process still exited zero but reported an error or a limit, and exits zero only when the turn is `ok`.
+`boxr show` names the captured stderr file in its help when a session did not succeed, the same way a failed launch does.
 The shape of `boxr ps`, `boxr status` and `boxr wait` is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
 `status` is the turn outcome and `state` is the session lifecycle, so a finished session reads `state: finished` with `status: ok`.
 boxr's own lifecycle maps onto the five states rather than adding to them: a turn with status `ok` is `finished`, a harness failure or reported error/limit is `failed`, and a session ended from outside is `interrupted`.
@@ -162,6 +163,7 @@ When the harness dies before a result arrives, the held step is appended without
 ### Secrets
 
 The raw layer is stored verbatim with owner-only permissions (0600 files in a 0700 directory) and is never read by any model.
+The stderr tail of a failed harness process is recorded in the report only, printed by `boxr status`, `boxr wait` and `boxr show`, and never written to the summary or served over HTTP.
 The normalized and summary layers pass through redaction on write: known secret patterns (API key prefixes, JWTs, private key blocks, `KEY=value` env lines) plus user-listed values from config, replaced with `[REDACTED:<kind>]`.
 Anything sent to a model (classification, eval mining, the prompt skill) reads only redacted layers.
 The promise is "redacted where recognized", never "safe to share".
@@ -181,7 +183,7 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero. A harness process that exits non-zero without a structured error records the last 4096 bytes of its stderr, snapped forward to a line start and trimmed, in the report as `stderrTail`; `boxr status`, `boxr wait` and `boxr show` print it, and the same path is named in `boxr show` help for a failed session. The tail stays out of `summary.jsonl` and out of every `boxr serve` response, because the raw layer is owner-only. A structured error is richer, so it is never replaced, and a zero exit with stderr warnings stays `ok`. A harness that recovers, such as pi after a successful `auto_retry_end`, clears the pending error and limit so a later error is the one recorded; the transcript keeps every attempt either way.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal. A note belongs to the verdict it was recorded with, so a later verdict recorded without `--note` clears the displayed note while the ledger keeps the earlier record.
 - Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.

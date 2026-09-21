@@ -12,6 +12,7 @@ const EXIT_ENV: &str = "BOXR_FAKE_PI_EXIT";
 const ARGS_ENV: &str = "BOXR_FAKE_PI_ARGS";
 const PROMPT_ENV: &str = "BOXR_FAKE_PI_PROMPT";
 const DELAY_ENV: &str = "BOXR_FAKE_PI_DELAY_MS";
+const STDERR_ENV: &str = "BOXR_FAKE_PI_STDERR";
 
 fn main() -> ExitCode {
     let fixture = match env::var_os(FIXTURE_ENV) {
@@ -136,8 +137,11 @@ fn main() -> ExitCode {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
-    if code != 0 {
-        eprintln!("fake pi failing on purpose with exit code {code}");
+    match env::var(STDERR_ENV) {
+        Ok(text) if !text.is_empty() => eprintln!("{text}"),
+        Ok(_) => {}
+        Err(_) if code != 0 => eprintln!("fake pi failing on purpose with exit code {code}"),
+        Err(_) => {}
     }
     ExitCode::from(code)
 }

@@ -1,8 +1,8 @@
 mod common;
 
 use common::{
-    assert_valid_atif, assert_valid_steps, example_binary, normalized_lines, path_field_of,
-    session_id_of, sources_of, stderr_of, stdout_of, summary_of,
+    assert_valid_atif, assert_valid_steps, example_binary, field_of, normalized_lines,
+    path_field_of, session_id_of, sources_of, stderr_of, stdout_of, summary_of,
 };
 use serde_json::Value;
 use std::fs;
@@ -15,6 +15,7 @@ struct Pi {
     args_file: PathBuf,
     prompt_file: PathBuf,
     exit_code: String,
+    stderr: Option<String>,
     fixture: &'static str,
 }
 
@@ -33,6 +34,7 @@ impl Pi {
             args_file,
             prompt_file,
             exit_code: "0".to_string(),
+            stderr: None,
             fixture: "hello",
         }
     }
@@ -78,6 +80,10 @@ impl Pi {
         self.exit_code = code.to_string();
     }
 
+    fn stderr_text(&mut self, text: &str) {
+        self.stderr = Some(text.to_string());
+    }
+
     fn recorded_args(&self) -> Vec<String> {
         fs::read_to_string(&self.args_file)
             .expect("recorded args")
@@ -105,6 +111,9 @@ impl Pi {
             .env("BOXR_FAKE_PI_EXIT", &self.exit_code)
             .env("BOXR_FAKE_PI_ARGS", &self.args_file)
             .env("BOXR_FAKE_PI_PROMPT", &self.prompt_file);
+        if let Some(stderr) = &self.stderr {
+            command.env("BOXR_FAKE_PI_STDERR", stderr);
+        }
         command.output().expect("boxr runs")
     }
 }
@@ -502,6 +511,205 @@ fn a_pi_usage_limit_is_recorded_as_limit_hit() {
             .contains("Weekly usage limit reached"),
         "{summary:?}"
     );
+}
+
+#[test]
+fn a_stderr_only_failure_records_the_stderr_tail() {
+    let mut pi = Pi::new();
+    pi.fail_with("1");
+    pi.stderr_text("boot failure: cannot reach the provider");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    let id = session_id_of(&stdout);
+    let message = "boot failure: cannot reach the provider";
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("exitCode: 1"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("stderrTail: \"{message}\"")),
+        "{stdout}"
+    );
+
+    let status = stdout_of(&pi.run(&["status", &id]));
+    assert_eq!(field_of(&status, "status"), "failed", "{status}");
+    assert!(
+        status.contains(&format!("stderrTail: \"{message}\"")),
+        "{status}"
+    );
+
+    let waited = stdout_of(&pi.run(&["wait", &id]));
+    assert_eq!(field_of(&waited, "status"), "failed", "{waited}");
+    assert!(
+        waited.contains(&format!("stderrTail: \"{message}\"")),
+        "{waited}"
+    );
+
+    let shown = stdout_of(&pi.run(&["show", &id]));
+    assert!(
+        shown.contains(&format!("stderrTail: \"{message}\"")),
+        "{shown}"
+    );
+    assert!(shown.contains("stderr.log"), "{shown}");
+    assert!(shown.contains("for the harness error output"), "{shown}");
+
+    let summary = summary_of(&pi.boxr_home(), &id);
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["exitCode"], 1);
+    assert!(summary["error"].is_null(), "{summary}");
+    assert!(!summary.to_string().contains(message), "{summary}");
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(pi.session_dir().join("report.json")).expect("report.json"),
+    )
+    .expect("a report object");
+    assert_eq!(report["error"], Value::Null, "{report}");
+    assert_eq!(report["stderrTail"], message, "{report}");
+}
+
+#[test]
+fn a_stderr_tail_is_bounded_to_the_last_kilobytes() {
+    let mut pi = Pi::new();
+    pi.fail_with("1");
+    pi.stderr_text(&format!("START-MARKER\n{}\nEND-MARKER", "x".repeat(5000)));
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let id = session_id_of(&stdout_of(&output));
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(pi.session_dir().join("report.json")).expect("report.json"),
+    )
+    .expect("a report object");
+    let tail = report["stderrTail"]
+        .as_str()
+        .expect("a recorded stderr tail");
+    assert!(tail.chars().count() <= 4096, "{}", tail.chars().count());
+    assert!(tail.ends_with("END-MARKER"), "{tail}");
+    assert!(!tail.contains("START-MARKER"), "{tail}");
+
+    let summary = summary_of(&pi.boxr_home(), &id);
+    assert!(summary["error"].is_null(), "{summary}");
+    assert!(!summary.to_string().contains("START-MARKER"), "{summary}");
+}
+
+#[test]
+fn an_empty_stderr_failure_records_no_error() {
+    let mut pi = Pi::new();
+    pi.fail_with("9");
+    pi.stderr_text("");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    let id = session_id_of(&stdout);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("exitCode: 9"), "{stdout}");
+    assert!(!stdout.contains("\n  error: "), "{stdout}");
+    assert!(!stdout.contains("stderrTail"), "{stdout}");
+
+    let summary = summary_of(&pi.boxr_home(), &id);
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["exitCode"], 9);
+    assert!(summary["error"].is_null(), "{summary}");
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(pi.session_dir().join("report.json")).expect("report.json"),
+    )
+    .expect("a report object");
+    assert!(report["stderrTail"].is_null(), "{report}");
+}
+
+#[test]
+fn successful_stderr_warnings_do_not_fail_the_session() {
+    let mut pi = Pi::new();
+    pi.stderr_text("warning: using cached credentials");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    let id = session_id_of(&stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(!stdout.contains("\n  error: "), "{stdout}");
+
+    let shown = stdout_of(&pi.run(&["show", &id]));
+    assert!(!shown.contains("stderr.log"), "{shown}");
+
+    let summary = summary_of(&pi.boxr_home(), &id);
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["error"].is_null(), "{summary}");
+
+    let stderr_log = fs::read_to_string(pi.session_dir().join("raw/stderr.log"))
+        .expect("captured harness stderr");
+    assert!(
+        stderr_log.contains("warning: using cached credentials"),
+        "{stderr_log}"
+    );
+}
+
+#[test]
+fn a_successful_auto_retry_clears_the_pending_error_and_limit() {
+    let mut pi = Pi::new();
+    pi.use_fixture("recovered");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    let id = session_id_of(&stdout);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(!stdout.contains("limitHit"), "{stdout}");
+    assert!(!stdout.contains("\n  error: "), "{stdout}");
+    assert!(
+        stdout.contains("message: \"recovered after retry\""),
+        "{stdout}"
+    );
+
+    let summary = summary_of(&pi.boxr_home(), &id);
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["limitHit"], false);
+    assert!(summary["error"].is_null(), "{summary}");
+
+    let lines = normalized_lines(&pi.session_dir().join("normalized.jsonl"));
+    let steps = steps_of(&lines);
+    assert_eq!(sources_of(steps), ["user", "agent", "agent"]);
+    assert_eq!(steps[1]["message"], "I hit the weekly usage limit");
+    assert_eq!(steps[2]["message"], "recovered after retry");
+}
+
+#[test]
+fn an_exhausted_retry_keeps_the_terminal_error() {
+    let mut pi = Pi::new();
+    pi.use_fixture("retry-exhausted");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    let id = session_id_of(&stdout);
+
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stdout.contains("status: failed"), "{stdout}");
+    assert!(stdout.contains("exitCode: 0"), "{stdout}");
+    assert!(stdout.contains("limitHit: true"), "{stdout}");
+    assert!(
+        stdout.contains("error: \"terminal error after exhausted retries\""),
+        "{stdout}"
+    );
+
+    let summary = summary_of(&pi.boxr_home(), &id);
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["limitHit"], true);
+    assert_eq!(summary["error"], "terminal error after exhausted retries");
+
+    let lines = normalized_lines(&pi.session_dir().join("normalized.jsonl"));
+    let steps = steps_of(&lines);
+    assert_eq!(sources_of(steps), ["user", "agent"]);
+    assert_eq!(steps[1]["message"], "giving up after exhausted retries");
 }
 
 #[test]
