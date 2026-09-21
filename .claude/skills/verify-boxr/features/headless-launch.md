@@ -40,8 +40,8 @@ Then `sessions/<boxr id>/raw/` under the throwaway home holds:
 | `transcript.jsonl` | a byte-identical copy of the harness's own transcript for that session |
 | `stderr.log` | the harness's stderr, empty on a clean run |
 
-The evidence directory holds `toon.txt`, `stderr.txt`, `build.log`, `meta.txt` and `raw/` with those same three files.
-`meta.txt` records the binary hash, the git revision, the harness version, the config directory used, the boxr pid, the exit code, whether it timed out, the boxr session id, the harness session id and whether the throwaway home was removed.
+The evidence directory holds `launch.txt` (the TOON result), `launch.stderr.txt`, `build.log`, `meta.txt`, `summary.jsonl` and `sessions/<id>/`, a copy of the whole session directory with those same three raw files.
+`meta.txt` records the binary hash, the git revision, the harness version, the config directory used, the boxr pid as `launchPid`, the exit code as `launchExit`, whether it timed out, the boxr session id, the harness session id, the transcript path Claude Code wrote, and whether the throwaway home was removed.
 
 ## Gotchas
 

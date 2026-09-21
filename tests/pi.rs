@@ -1,8 +1,8 @@
 mod common;
 
 use common::{
-    assert_valid_atif, assert_valid_steps, example_binary, normalized_lines, session_id_of,
-    sources_of, stderr_of, stdout_of, summary_of,
+    assert_valid_atif, assert_valid_steps, example_binary, normalized_lines, path_field_of,
+    session_id_of, sources_of, stderr_of, stdout_of, summary_of,
 };
 use serde_json::Value;
 use std::fs;
@@ -318,10 +318,7 @@ fn a_pi_session_exports_as_a_valid_atif_trajectory() {
     assert!(stdout.contains("schemaVersion: ATIF-v1.8"), "{stdout}");
     assert!(stdout.contains("steps: 2"), "{stdout}");
 
-    let path = stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("path: "))
-        .expect("export path");
+    let path = path_field_of(&stdout, "path");
     let document: Value =
         serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
     assert_valid_atif(&document);
