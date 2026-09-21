@@ -19,9 +19,10 @@ Add the file in the same ticket that adds the feature, and wire its driver into 
 | resume | `boxr resume <id> "<prompt>"` | `resume` | [resume.md](resume.md) |
 | account profiles | `boxr account add\|list\|remove`, `--account <name>` | `account-profiles` | [account-profiles.md](account-profiles.md) |
 | ledger reads | `boxr show`, `boxr export --atif`, `boxr stats`, `--kind` | `detached`, `outcomes`, `session-cost` | [ledger-reads.md](ledger-reads.md) |
+| models and list | `boxr models --harness pi`, `boxr list [--all] [--limit N]` | `models-and-list` | [models-and-list.md](models-and-list.md) |
+| serve | `boxr serve [--bind <IP>] [--port N] [--token <secret>]` | `serve` | [serve.md](serve.md) |
 | outcomes | `boxr outcome <id> success --note "<text>"`, `--check-reverted` | `outcomes` | [outcomes.md](outcomes.md) |
 | session cost | `currency` and `prices` in `config.json` | `session-cost` | [session-cost.md](session-cost.md) |
-| models and list | `boxr models --harness pi`, `boxr list [--all] [--limit N]` | `models-and-list` | [models-and-list.md](models-and-list.md) |
 
 ## Proof status
 

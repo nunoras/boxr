@@ -32,6 +32,7 @@ use output::{one_line, without_terminal_controls, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -219,8 +220,18 @@ enum Command {
         account: Option<String>,
     },
     Serve {
+        #[arg(long, value_name = "IP", default_value = serve::DEFAULT_BIND, value_parser = parse_bind)]
+        bind: IpAddr,
+
         #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_PORT)]
         port: u16,
+
+        #[arg(
+            long,
+            value_name = "TOKEN",
+            help = "Require this bearer token on every request; prefer the BOXR_SERVE_TOKEN environment variable, which keeps the secret out of the process arguments"
+        )]
+        token: Option<String>,
     },
     #[command(name = "__supervise", hide = true)]
     Supervise {
@@ -255,6 +266,12 @@ struct AccountRemove {
 
     #[arg(long)]
     yes: bool,
+}
+
+fn parse_bind(value: &str) -> std::result::Result<IpAddr, String> {
+    value
+        .parse()
+        .map_err(|_| format!("`{value}` is not an IPv4 or IPv6 address"))
 }
 
 fn main() -> ExitCode {
@@ -339,7 +356,7 @@ fn dispatch() -> Result<i32> {
         Some(Command::Stats { by, since }) => stats(&home, &by, &since),
         Some(Command::List { all, limit }) => list(&home, all, limit),
         Some(Command::Models { harness, account }) => models(harness, account, &home, &config),
-        Some(Command::Serve { port }) => serve::run(port),
+        Some(Command::Serve { bind, port, token }) => serve::run(bind, port, token),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
     }
@@ -1368,6 +1385,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     })?;
     let session = Session::open(&home, id);
     let final_message = resolve_final_message(&session);
+    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     if message {
         if let Some(text) = &final_message {
             let text = without_terminal_controls(text);
@@ -1381,7 +1399,6 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let truncated = final_message
         .as_deref()
         .map(|text| one_line(text, MESSAGE_LIMIT));
-    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     let mut toon = Toon::new();
     summarize(&mut toon, &summary, stderr_tail.as_deref());
     toon.section("message")

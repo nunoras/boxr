@@ -1,6 +1,6 @@
 ---
 name: verify-boxr
-description: Use when proving boxr works against the real Claude Code harness instead of the fakes the black-box suite uses. Drives the release binary against a throwaway `BOXR_HOME` and keeps evidence under `~/.boxr-verify`. Covers the blocking headless launch and its raw ledger, detached sessions (`--detach` with `ps`, `status`, `tail`, `wait`, `stop`), `boxr resume`, account profiles (`account list/remove`, `--account` routing), the ledger readers (`show`, `export --atif`, `stats`), declared kinds, outcomes (`boxr outcome`, `--check-reverted`) and session cost. Run it before a release, after changing a harness adapter, the launcher, the supervisor, the ledger writer or the outcome commands, or when a harness changes its output format.
+description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Drives the release binary against a throwaway `BOXR_HOME` and keeps evidence under `~/.boxr-verify`. Covers the blocking headless launch and its raw ledger, detached sessions (`--detach` with `ps`, `status`, `tail`, `wait`, `stop`), `boxr resume`, account profiles (`account list/remove`, `--account` routing), the ledger readers (`show`, `export --atif`, `stats`), declared kinds, model discovery and listing (`boxr models`, `boxr list`), the read-only HTTP surface (`boxr serve --bind --port --token`), outcomes (`boxr outcome`, `--check-reverted`) and session cost. Run it before a release, after changing a harness adapter, the launcher, the supervisor, the ledger writer, the serve listener or the outcome commands, or when a harness changes its output format.
 ---
 
 # verify-boxr
@@ -24,6 +24,8 @@ Each driver proves as much as it can from one session.
 | `detached` | 1 |
 | `resume` | 2 |
 | `account-profiles` | 0 |
+| `models-and-list` | 0 |
+| `serve` | 0 |
 
 Do not loop this skill.
 Do not run it in CI.
@@ -51,7 +53,7 @@ Run the driver from the repo root:
 .claude/skills/verify-boxr/scripts/verify-boxr.sh <feature>
 ```
 
-`<feature>` is one of `headless-launch` (the default), `outcomes`, `session-cost`, `detached`, `resume` or `account-profiles`.
+`<feature>` is one of `headless-launch` (the default), `outcomes`, `session-cost`, `detached`, `resume`, `account-profiles`, `models-and-list` or `serve`.
 
 ## The loop
 
@@ -98,6 +100,8 @@ It carries how to reach the feature, how to drive it, the end state that proves 
 - [resume](features/resume.md): `boxr resume <id> "<prompt>"`.
 - [account-profiles](features/account-profiles.md): `boxr account add|list|remove` and `--account`.
 - [ledger-reads](features/ledger-reads.md): `boxr show`, `boxr export --atif`, `boxr stats`, and `--kind`.
+- [models-and-list](features/models-and-list.md): `boxr models --harness <h>` and `boxr list [--all] [--limit N]`, both without launching anything.
+- [serve](features/serve.md): `boxr serve [--bind <IP>] [--port N] [--token <secret>]`, the read-only HTTP view, driven without launching a harness.
 - [outcomes](features/outcomes.md): `boxr outcome <id> success --note "<text>"` and `boxr outcome --check-reverted <id>`.
 - [session-cost](features/session-cost.md): `currency` and `prices` in `config.json`, read back by the launch, `boxr show` and `boxr stats`.
 
@@ -109,6 +113,7 @@ A ticket that adds user-facing surface adds its own feature file, wires a driver
 The driver takes no switches.
 It always drives Claude Code on `haiku` at `--effort low` with the prompt `Reply with the single word ok and nothing else.`, and writes evidence under `~/.boxr-verify`.
 `resume` continues with `Reply with the single word yes and nothing else.`, `detached` declares `--kind describe`, `account-profiles` uses a profile named `verify`, and `session-cost` writes the price table from its feature file into the throwaway home.
+The `models-and-list` and `serve` drives launch no harness and spend no quota.
 
 ## Gotchas
 
