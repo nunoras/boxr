@@ -1,5 +1,8 @@
 # boxr
 
+[![CI](https://github.com/nunoras/boxr/actions/workflows/ci.yml/badge.svg)](https://github.com/nunoras/boxr/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 Launch any coding agent on any harness, model, effort and account. Record every session in a local ledger. Measure what works.
 
 boxr is a CLI that sits in front of your coding agents. It starts a headless or interactive session, tails the harness transcript live, normalizes the output into ATIF steps, and appends a summary line when the session ends. You get token counts, cost, git evidence and stats grouped however you want - without any of it leaving your machine.
@@ -58,16 +61,18 @@ boxr resume <id> "now add the tests"
 
 ## Get started
 
-1. Install from source (requires Rust):
+1. Install (requires Rust):
 
 ```
-cargo install --path .
+cargo install --git https://github.com/nunoras/boxr --locked
 ```
 
-Or from the repository:
+Or from a local clone:
 
 ```
-cargo install --git https://github.com/nunoras/boxr
+git clone https://github.com/nunoras/boxr
+cd boxr
+cargo install --path . --locked
 ```
 
 2. Set your defaults in `~/.boxr/config.json`:
@@ -141,12 +146,13 @@ boxr skill install --harness all
 
 ## References
 
+- [depot](https://github.com/nunoras/depot) - multi-task agent coordinator that launches workers through boxr.
 - [Design document](docs/design.md) - settled decisions and the full milestone plan.
 - [ATIF trajectory format](https://www.harborframework.com/docs/agents/trajectory-format) - the schema boxr normalizes to.
 
 ## License
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE).
 
 ## Status
 
