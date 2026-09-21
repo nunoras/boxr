@@ -390,6 +390,52 @@ fn pi_tool_results_fold_into_the_agent_step_that_called_them() {
 }
 
 #[test]
+fn pi_preserves_tool_result_error_flags_in_the_ledger_and_export() {
+    let mut pi = Pi::new();
+    pi.use_fixture("error-flags");
+    let launched = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "flags"]);
+    let stdout = stdout_of(&launched);
+    assert_eq!(
+        launched.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&launched)
+    );
+    let id = session_id_of(&stdout);
+
+    let lines = normalized_lines(&pi.session_dir().join("normalized.jsonl"));
+    let steps = steps_of(&lines);
+    assert_valid_steps(steps);
+    let results = steps[1]["observation"]["results"]
+        .as_array()
+        .expect("folded tool results");
+    assert_eq!(results.len(), 3, "{}", steps[1]);
+    assert_eq!(results[0]["is_error"], true, "{}", results[0]);
+    assert_eq!(results[1]["is_error"], false, "{}", results[1]);
+    assert!(results[2].get("is_error").is_none(), "{}", results[2]);
+
+    let output = pi.run(&["export", "--atif", &id]);
+    let export_stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    let path = path_field_of(&export_stdout, "path");
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
+    assert_valid_atif(&document);
+    let exported = document["steps"][1]["observation"]["results"]
+        .as_array()
+        .expect("folded tool results");
+    assert_eq!(exported.len(), 3, "{document}");
+    assert_eq!(exported[0]["is_error"], true, "{}", exported[0]);
+    assert_eq!(exported[1]["is_error"], false, "{}", exported[1]);
+    assert!(exported[2].get("is_error").is_none(), "{}", exported[2]);
+}
+
+#[test]
 fn pi_receives_the_prompt_on_stdin() {
     let pi = Pi::new();
     let prompt = "first line\nsecond line with \"quotes\" & %PATH%\r\nthird line\n";

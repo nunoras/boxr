@@ -1,6 +1,7 @@
 use crate::config::{Config, Currency, Price};
 use anyhow::Result;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 
 const TOKENS_PER_PRICE_UNIT: f64 = 1_000_000.0;
@@ -19,6 +20,32 @@ pub struct Pricing {
     pub api_equivalent_cost: Option<f64>,
     pub currency: Option<String>,
     pub error: Option<String>,
+    pub unpriced: bool,
+}
+
+#[derive(Debug)]
+pub enum CostError {
+    MissingPrice(String),
+    Arithmetic(anyhow::Error),
+}
+
+impl fmt::Display for CostError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CostError::MissingPrice(model) => {
+                write!(formatter, "the price table has no entry for model {model}")
+            }
+            CostError::Arithmetic(error) => write!(formatter, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for CostError {}
+
+impl From<anyhow::Error> for CostError {
+    fn from(error: anyhow::Error) -> CostError {
+        CostError::Arithmetic(error)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -39,9 +66,9 @@ impl CostTable {
         self.currency.code()
     }
 
-    pub fn cost_of(&self, model: &str, tokens: &Tokens) -> Result<Option<f64>> {
+    pub fn cost_of(&self, model: &str, tokens: &Tokens) -> Result<f64, CostError> {
         let Some(price) = self.prices.get(model) else {
-            return Ok(None);
+            return Err(CostError::MissingPrice(model.to_string()));
         };
         let uncached_input = tokens.prompt.saturating_sub(tokens.cached);
         let non_reasoning_output = tokens.completion.saturating_sub(tokens.reasoning);
@@ -50,11 +77,11 @@ impl CostTable {
             + component(non_reasoning_output, price.output, "output")?
             + component(tokens.reasoning, price.reasoning, "reasoning")?;
         if !amount.is_finite() {
-            anyhow::bail!(
+            return Err(CostError::Arithmetic(anyhow::anyhow!(
                 "calculating API-equivalent cost for {model} produced a non-finite amount"
-            );
+            )));
         }
-        Ok(Some(amount))
+        Ok(amount)
     }
 }
 
@@ -77,20 +104,23 @@ pub fn calculate(home: &Path, model: &str, tokens: &Tokens) -> Pricing {
     match table(home) {
         Ok(table) => match table.cost_of(model, tokens) {
             Ok(api_equivalent_cost) => Pricing {
-                api_equivalent_cost,
+                api_equivalent_cost: Some(api_equivalent_cost),
                 currency: Some(table.currency().to_string()),
                 error: None,
+                unpriced: false,
             },
             Err(error) => Pricing {
                 api_equivalent_cost: None,
                 currency: Some(table.currency().to_string()),
-                error: Some(format!("{error:#}")),
+                unpriced: matches!(error, CostError::MissingPrice(_)),
+                error: Some(error.to_string()),
             },
         },
         Err(error) => Pricing {
             api_equivalent_cost: None,
             currency: None,
             error: Some(format!("{error:#}")),
+            unpriced: false,
         },
     }
 }
