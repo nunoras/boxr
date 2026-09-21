@@ -39,7 +39,9 @@ That is one real Claude Code session on the machine's normal login; the four out
 
 ## End state
 
-The launch prints the `session:` result with `exitCode: 0` and a `git:` section carrying `repo` and `commits: 0`, because the baseline commit is both the launch `HEAD` and the exit `HEAD`.
+The launch prints the `session:` result with `exitCode: 0`.
+`show` carries the `git:` section with `repo` and `commits: 0`, because the baseline commit is both the launch `HEAD` and the exit `HEAD`.
+The launch output itself has no `git:` section.
 
 `outcome` prints the `outcome:` section:
 
@@ -71,7 +73,7 @@ help[2]:
 `<throwaway>/home/summary.jsonl` holds three records: the full summary the launch appended, the field-scoped record `outcome` appended carrying `verdict` and `verdictNote`, and the field-scoped record `--check-reverted` appended carrying `git`.
 Nothing earlier is rewritten.
 
-The evidence directory holds `toon.txt`, `stderr.txt`, `build.log`, `meta.txt` and `raw/` as for a headless launch, plus `outcome.txt`, `show.txt`, `stats.txt` and `reverts.txt`.
+The evidence directory holds what a headless launch leaves, plus `outcome.txt`, `show.txt`, `stats.txt` and `reverts.txt`.
 `meta.txt` also records `gitBase`, the baseline commit the session started from.
 
 ## Gotchas
