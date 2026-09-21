@@ -364,6 +364,25 @@ fn declared_core_kind_is_recorded_with_its_source() {
 }
 
 #[test]
+fn declared_describe_kind_is_accepted() {
+    let harness = Harness::new();
+    let output = harness.run(&[
+        "--harness",
+        "claude",
+        "--model",
+        "sonnet",
+        "--kind",
+        "describe",
+        "hello",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+
+    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout_of(&output)));
+    assert_eq!(summary["kind"], "describe");
+    assert_eq!(summary["kindSource"], "declared");
+}
+
+#[test]
 fn an_unknown_kind_lists_the_valid_kinds() {
     let harness = Harness::new();
     let output = harness.run(&[
@@ -380,7 +399,9 @@ fn an_unknown_kind_lists_the_valid_kinds() {
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("unknown kind `unknown`"), "{stderr}");
     assert!(
-        stderr.contains("Valid kinds: build, chore, docs, fix, plan, research, review"),
+        stderr.contains(
+            "Valid kinds: build, chore, describe, docs, fix, plan, research, review"
+        ),
         "{stderr}"
     );
 }

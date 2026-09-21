@@ -166,7 +166,8 @@ The promise is "redacted where recognized", never "safe to share".
 
 ## Kinds
 
-Fixed core: `build`, `fix`, `research`, `plan`, `review`, `chore`, `docs`.
+Fixed core: `build`, `fix`, `research`, `plan`, `review`, `chore`, `docs`, `describe`.
+`describe` is a reviewer-facing pull request description written from a diff; it is not a build, fix, or docs turn.
 Custom kinds are added in config, each with a one-line description the classifier can use.
 One kind per session.
 
