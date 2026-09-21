@@ -28,7 +28,7 @@ use detached::State;
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
 use ledger::{Summary, SummaryUpdate};
-use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
+use output::{one_line, without_terminal_controls, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -1094,6 +1094,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let final_message = resolve_final_message(&session);
     if message {
         if let Some(text) = &final_message {
+            let text = without_terminal_controls(text);
             print!("{text}");
             if !text.ends_with('\n') {
                 println!();

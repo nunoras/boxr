@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"/work/repo","session_id":"33333333-4444-4555-8666-777777777777","tools":["Bash","Edit","Read","Write"],"mcp_servers":[],"model":"claude-sonnet-5","permissionMode":"default","slash_commands":["init"],"apiKeySource":"none","claude_code_version":"2.1.272","output_style":"default","uuid":"ccccccc1-0000-4000-8000-000000000001"}
+{"type":"result","subtype":"success","session_id":"33333333-4444-4555-8666-777777777777","is_error":false,"result":"control characters fixture","uuid":"ccccccc1-0000-4000-8000-000000000002"}

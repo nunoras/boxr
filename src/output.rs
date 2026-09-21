@@ -119,6 +119,12 @@ fn escape(value: &str) -> String {
     escaped
 }
 
+pub fn without_terminal_controls(text: &str) -> String {
+    text.chars()
+        .filter(|c| matches!(c, '\n' | '\t') || !c.is_control())
+        .collect()
+}
+
 pub fn one_line(text: &str, limit: usize) -> String {
     let flattened = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flattened.chars().count() <= limit {
