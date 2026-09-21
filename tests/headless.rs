@@ -906,10 +906,7 @@ fn export_atif_writes_a_document_that_matches_the_schema() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(stdout.contains("schemaVersion: ATIF-v1.8"), "{stdout}");
 
-    let path = stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("path: "))
-        .expect("export path");
+    let path = path_field_of(&stdout, "path");
     let document: Value =
         serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
     assert_valid_atif(&document);
@@ -1138,7 +1135,7 @@ fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted
         .output()
         .expect("close-console runs");
     assert!(closed.status.success(), "{}", stderr_of(&closed));
-    child.wait_with_output().expect("boxr finishes");
+    let output = child.wait_with_output().expect("boxr finishes");
 
     let session = session_dir(&harness);
     let lines = normalized_lines(&session.join("normalized.jsonl"));
@@ -1153,7 +1150,13 @@ fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted
 
     let id = session.file_name().expect("session id").to_string_lossy();
     let summary = summary_of(&harness.boxr_home(), &id);
-    assert_eq!(summary["status"], "interrupted");
+    assert_eq!(
+        summary["status"],
+        "interrupted",
+        "{summary}\n{}\n{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
 }
 
 #[test]
