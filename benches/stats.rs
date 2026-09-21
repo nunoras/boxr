@@ -1,18 +1,24 @@
-use std::fs;
+#[path = "../tests/common/summary.rs"]
+mod summary;
+
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use summary::{write_summary_fixture, SummaryFixture};
 
 const SESSIONS: usize = 10_000;
+const BUDGET: Duration = Duration::from_secs(3);
 
 fn main() {
     let root = tempfile::tempdir().expect("temp dir");
     let home = root.path().join("boxr");
-    fs::create_dir_all(&home).expect("boxr home");
-    let mut ledger = String::new();
     for index in 0..SESSIONS {
-        ledger.push_str(&summary_line(index));
+        write_summary_fixture(
+            &home,
+            index,
+            SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(0.000_002)),
+        );
     }
-    fs::write(home.join("summary.jsonl"), ledger).expect("ledger");
 
     let started = Instant::now();
     let output = Command::new(env!("CARGO_BIN_EXE_boxr"))
@@ -27,11 +33,14 @@ fn main() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("sonnet,build,USD,10000,60000,40000,0.02,0"),
+        "{stdout}"
+    );
+    assert!(
+        elapsed < BUDGET,
+        "stats over {SESSIONS} sessions took {elapsed:?}, over the {BUDGET:?} budget"
+    );
     println!("stats over {SESSIONS} sessions took {elapsed:?}");
-}
-
-fn summary_line(index: usize) -> String {
-    format!(
-        "{{\"id\":\"s-{index}\",\"harness\":\"claude\",\"model\":\"sonnet\",\"effort\":\"high\",\"profile\":\"work\",\"mode\":\"headless\",\"start\":\"2099-01-01T00:00:00.000Z\",\"end\":\"2099-01-01T00:00:00.004Z\",\"durationMs\":4,\"status\":\"ok\",\"exitCode\":0,\"steps\":1,\"promptTokens\":1,\"completionTokens\":2,\"cachedTokens\":3,\"reasoningTokens\":0,\"apiEquivalentCost\":0.000002,\"currency\":\"USD\",\"kind\":\"build\",\"kindSource\":\"declared\"}}\n"
-    )
 }

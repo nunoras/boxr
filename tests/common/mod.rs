@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod summary;
+
 use serde_json::Value;
 use std::env;
 use std::ffi::OsString;

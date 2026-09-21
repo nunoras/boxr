@@ -1,5 +1,6 @@
 mod common;
 
+use common::summary::{write_summary_fixture, write_summary_line, SummaryFixture};
 use common::*;
 use serde_json::{json, Value};
 use std::fs;
@@ -442,17 +443,17 @@ fn stats_without_sessions_prints_an_empty_table() {
 fn stats_groups_the_summary_ledger_by_model_and_kind() {
     let harness = Harness::new();
     write_summary_fixture(
-        &harness,
+        &harness.boxr_home(),
         0,
         SummaryFixture::new("opus", "build", 10, 20, 30, 40, Some(0.25)),
     );
     write_summary_fixture(
-        &harness,
+        &harness.boxr_home(),
         1,
         SummaryFixture::new("opus", "build", 1, 2, 3, 4, Some(0.5)),
     );
     write_summary_fixture(
-        &harness,
+        &harness.boxr_home(),
         2,
         SummaryFixture::new("sonnet", "review", 5, 6, 7, 8, None),
     );
@@ -478,12 +479,12 @@ fn stats_groups_the_summary_ledger_by_model_and_kind() {
 fn stats_rejects_a_non_finite_cost_total() {
     let harness = Harness::new();
     write_summary_fixture(
-        &harness,
+        &harness.boxr_home(),
         0,
         SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(1e308)),
     );
     write_summary_fixture(
-        &harness,
+        &harness.boxr_home(),
         1,
         SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(1e308)),
     );
@@ -503,7 +504,7 @@ fn stats_rejects_a_non_finite_cost_total() {
 fn stats_counts_a_summary_written_before_costs_as_unpriced() {
     let harness = Harness::new();
     write_summary_line(
-        &harness,
+        &harness.boxr_home(),
         json!({
             "id": "s-legacy",
             "harness": "claude",
@@ -537,7 +538,7 @@ fn stats_groups_ten_thousand_sessions() {
     let harness = Harness::new();
     for index in 0..10_000 {
         write_summary_fixture(
-            &harness,
+            &harness.boxr_home(),
             index,
             SummaryFixture::new("sonnet", "build", 1, 2, 3, 4, Some(0.000_002)),
         );
@@ -551,82 +552,6 @@ fn stats_groups_ten_thousand_sessions() {
         stdout.contains("sonnet,build,USD,10000,60000,40000,0.02,0"),
         "{stdout}"
     );
-}
-
-struct SummaryFixture<'a> {
-    model: &'a str,
-    kind: &'a str,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    cached_tokens: u64,
-    duration_ms: u64,
-    cost: Option<f64>,
-}
-
-impl<'a> SummaryFixture<'a> {
-    fn new(
-        model: &'a str,
-        kind: &'a str,
-        prompt_tokens: u64,
-        completion_tokens: u64,
-        cached_tokens: u64,
-        duration_ms: u64,
-        cost: Option<f64>,
-    ) -> SummaryFixture<'a> {
-        SummaryFixture {
-            model,
-            kind,
-            prompt_tokens,
-            completion_tokens,
-            cached_tokens,
-            duration_ms,
-            cost,
-        }
-    }
-}
-
-fn write_summary_fixture(harness: &Harness, index: usize, fixture: SummaryFixture<'_>) {
-    write_summary_line(
-        harness,
-        json!({
-            "id": format!("s-{index}"),
-            "harness": "claude",
-            "model": fixture.model,
-            "effort": "high",
-            "profile": "work",
-            "mode": "headless",
-            "start": "2099-01-01T00:00:00.000Z",
-            "end": "2099-01-01T00:00:00.004Z",
-            "durationMs": fixture.duration_ms,
-            "status": "ok",
-            "exitCode": 0,
-            "steps": 1,
-            "promptTokens": fixture.prompt_tokens,
-            "completionTokens": fixture.completion_tokens,
-            "cachedTokens": fixture.cached_tokens,
-            "reasoningTokens": 0,
-            "apiEquivalentCost": fixture.cost,
-            "currency": "USD",
-            "kind": fixture.kind,
-            "kindSource": "declared"
-        }),
-    );
-}
-
-fn write_summary_line(harness: &Harness, line: Value) {
-    let home = harness.boxr_home();
-    fs::create_dir_all(&home).expect("boxr home");
-    let encoded = serde_json::to_string(&line).expect("summary fixture");
-    use std::io::Write;
-    writeln!(
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(home.join("summary.jsonl"))
-            .expect("summary ledger"),
-        "{encoded}"
-    )
-    .expect("summary line");
 }
 
 #[test]
@@ -811,7 +736,7 @@ fn the_configured_currency_sets_the_recorded_currency_and_amount() {
 fn a_cost_calculation_error_is_not_counted_as_unpriced() {
     let harness = Harness::new();
     write_summary_line(
-        &harness,
+        &harness.boxr_home(),
         json!({
             "id": "s-overflow",
             "harness": "claude",
