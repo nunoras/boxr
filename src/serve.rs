@@ -1,5 +1,6 @@
 use crate::clock;
 use crate::detached::{self, State};
+use crate::fail::Fail;
 use crate::home;
 use crate::ledger;
 use crate::output::Toon;
@@ -9,12 +10,13 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 pub const DEFAULT_PORT: u16 = 4035;
+pub const DEFAULT_BIND: &str = "127.0.0.1";
 
 #[derive(Serialize)]
 struct SessionRow {
@@ -24,9 +26,19 @@ struct SessionRow {
     model: String,
 }
 
-pub fn run(port: u16) -> Result<i32> {
+pub fn run(bind: IpAddr, port: u16, token: Option<String>) -> Result<i32> {
     let home = home::boxr_home()?;
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let token = match token {
+        Some(value) if value.is_empty() => {
+            return Err(Fail::usage(
+                "the bearer token is empty",
+                vec!["Run `boxr serve --token <secret>` with a non-empty secret".to_string()],
+            )
+            .into())
+        }
+        value => value,
+    };
+    let addr = SocketAddr::new(bind, port);
     let listener = TcpListener::bind(addr)
         .with_context(|| format!("binding the ledger HTTP server on {addr}"))?;
     listener
@@ -35,14 +47,20 @@ pub fn run(port: u16) -> Result<i32> {
     let bound = listener
         .local_addr()
         .context("reading the ledger HTTP listen address")?;
+    if !bound.ip().is_loopback() && token.is_none() {
+        eprintln!(
+            "warning: boxr serve is listening on {bound} without a token, so anyone who can reach it can read the ledger"
+        );
+    }
     print!("{}", render_listen(bound));
     let _ = std::io::stdout().flush();
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
                 let home = home.clone();
+                let token = token.clone();
                 thread::spawn(move || {
-                    if let Err(error) = handle_connection(&home, stream) {
+                    if let Err(error) = handle_connection(&home, token.as_deref(), stream) {
                         let _ = error;
                     }
                 });
@@ -72,7 +90,7 @@ fn render_listen(addr: SocketAddr) -> String {
     toon.render()
 }
 
-fn handle_connection(home: &Path, mut stream: TcpStream) -> Result<()> {
+fn handle_connection(home: &Path, token: Option<&str>, mut stream: TcpStream) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
     let mut buf = [0u8; 8192];
@@ -88,6 +106,14 @@ fn handle_connection(home: &Path, mut stream: TcpStream) -> Result<()> {
             return Ok(());
         }
     };
+    if !authorized(&request, token) {
+        return write_response(
+            &mut stream,
+            401,
+            "application/json",
+            &error_body("authentication required"),
+        );
+    }
     let (status, body) = dispatch(home, &request);
     write_response(&mut stream, status, "application/json", &body)
 }
@@ -95,13 +121,40 @@ fn handle_connection(home: &Path, mut stream: TcpStream) -> Result<()> {
 struct Request {
     method: String,
     path: String,
+    authorization: Option<String>,
+}
+
+fn authorized(request: &Request, token: Option<&str>) -> bool {
+    match token {
+        None => true,
+        Some(expected) => request
+            .authorization
+            .as_deref()
+            .is_some_and(|header| bearer_matches(header, expected)),
+    }
+}
+
+fn bearer_matches(header: &str, expected: &str) -> bool {
+    let Some((scheme, provided)) = header.split_once(' ') else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("bearer")
+        && constant_time_eq(provided.as_bytes(), expected.as_bytes())
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
 }
 
 fn parse_request(text: &str) -> std::result::Result<Request, String> {
-    let line = text
-        .lines()
-        .next()
-        .ok_or_else(|| "empty request".to_string())?;
+    let mut lines = text.lines();
+    let line = lines.next().ok_or_else(|| "empty request".to_string())?;
     let mut parts = line.split_whitespace();
     let method = parts
         .next()
@@ -115,7 +168,21 @@ fn parse_request(text: &str) -> std::result::Result<Request, String> {
         return Err("missing HTTP version".to_string());
     }
     let path = path.split('?').next().unwrap_or(path.as_str()).to_string();
-    Ok(Request { method, path })
+    let mut authorization = None;
+    for header in lines {
+        let Some((name, value)) = header.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("authorization") {
+            authorization = Some(value.trim().to_string());
+            break;
+        }
+    }
+    Ok(Request {
+        method,
+        path,
+        authorization,
+    })
 }
 
 fn dispatch(home: &Path, request: &Request) -> (u16, String) {
@@ -264,6 +331,7 @@ fn write_response(
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
         _ => "Error",

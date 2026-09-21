@@ -32,6 +32,7 @@ use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -220,8 +221,14 @@ enum Command {
         account: Option<String>,
     },
     Serve {
+        #[arg(long, value_name = "IP", default_value = serve::DEFAULT_BIND, value_parser = parse_bind)]
+        bind: IpAddr,
+
         #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_PORT)]
         port: u16,
+
+        #[arg(long, value_name = "TOKEN")]
+        token: Option<String>,
     },
     #[command(name = "__supervise", hide = true)]
     Supervise {
@@ -256,6 +263,12 @@ struct AccountRemove {
 
     #[arg(long)]
     yes: bool,
+}
+
+fn parse_bind(value: &str) -> std::result::Result<IpAddr, String> {
+    value
+        .parse()
+        .map_err(|_| format!("`{value}` is not an IPv4 or IPv6 address"))
 }
 
 fn main() -> ExitCode {
@@ -340,7 +353,7 @@ fn dispatch() -> Result<i32> {
         Some(Command::Stats { by, since }) => stats(&home, &by, &since),
         Some(Command::List { all, limit }) => list(&home, all, limit),
         Some(Command::Models { harness, account }) => models(harness, account, &home, &config),
-        Some(Command::Serve { port }) => serve::run(port),
+        Some(Command::Serve { bind, port, token }) => serve::run(bind, port, token),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
     }

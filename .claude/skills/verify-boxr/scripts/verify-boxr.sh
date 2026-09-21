@@ -49,6 +49,7 @@ case "$feature" in
   models-and-list)
     harness=pi
     ;;
+  serve) ;;
   session-cost)
     config_json='{"currency":"USD","prices":{"haiku":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}'
     ;;
@@ -185,6 +186,96 @@ if [ "$feature" = models-and-list ]; then
   say "  evidence: $run_dir"
   say "help[2]:"
   say "  Read the model table at $run_dir/models.txt"
+  say "  Read $run_dir/meta.txt for the doctor facts behind this run"
+  exit 0
+fi
+
+if [ "$feature" = serve ]; then
+  step="serve"
+  BOXR_HOME="$boxr_home"
+  export BOXR_HOME
+  command -v curl >/dev/null 2>&1 || die "curl is not on PATH"
+  {
+    printf 'feature: %s\n' "$feature"
+    printf 'runId: %s-%s\n' "$stamp" "$feature"
+    printf 'date: %s\n' "$stamp"
+    printf 'boxrVersion: %s\n' "$boxr_version"
+    printf 'boxrBinary: %s\n' "$boxr_bin"
+    printf 'boxrBinarySha256: %s\n' "$(sha256 "$boxr_bin")"
+    printf 'gitHead: %s\n' "$git_head"
+    printf 'gitDirtyFiles: %s\n' "$git_dirty"
+    printf 'throwaway: %s\n' "$throwaway"
+  } >"$meta"
+
+  serve_start() {
+    label="$1"
+    shift
+    listen="$run_dir/listen-$label.txt"
+    errfile="$run_dir/serve-$label.stderr.txt"
+    "$boxr_bin" serve --port 0 "$@" >"$listen" 2>"$errfile" &
+    boxr_pid=$!
+    port=""
+    waited=0
+    while [ -z "$port" ]; do
+      [ "$waited" -lt 10 ] || die "boxr serve ($label) never printed a port; read $listen"
+      port="$(sed -n 's/^  port: //p' "$listen" | head -n 1)"
+      sleep 1
+      waited=$((waited + 1))
+    done
+  }
+
+  serve_stop() {
+    kill "$boxr_pid" 2>/dev/null || true
+    wait "$boxr_pid" 2>/dev/null || true
+    boxr_pid=""
+  }
+
+  step="serve-default"
+  serve_start default
+  grep -q '^  host: 127.0.0.1$' "$run_dir/listen-default.txt" \
+    || die "boxr serve did not default to loopback; read $run_dir/listen-default.txt"
+  code="$(curl -s -o "$run_dir/ps.json" -w '%{http_code}' "http://127.0.0.1:$port/ps")"
+  [ "$code" = 200 ] || die "GET /ps answered $code without a token; read $run_dir/ps.json"
+  grep -q '"running"' "$run_dir/ps.json" || die "GET /ps returned no running field; read $run_dir/ps.json"
+  if grep -q 'warning' "$run_dir/serve-default.stderr.txt"; then
+    die "the loopback bind warned on stderr; read $run_dir/serve-default.stderr.txt"
+  fi
+  serve_stop
+
+  step="serve-warning"
+  serve_start warning --bind 0.0.0.0
+  grep -q 'warning' "$run_dir/serve-warning.stderr.txt" \
+    || die "binding 0.0.0.0 without a token did not warn; read $run_dir/serve-warning.stderr.txt"
+  grep -q '0.0.0.0' "$run_dir/serve-warning.stderr.txt" \
+    || die "the warning does not name the bind; read $run_dir/serve-warning.stderr.txt"
+  serve_stop
+
+  step="serve-token"
+  serve_start token --token s3cret-verify-token
+  unauth="$(curl -s -o "$run_dir/unauth.json" -w '%{http_code}' "http://127.0.0.1:$port/ps")"
+  [ "$unauth" = 401 ] || die "GET /ps without a token answered $unauth; read $run_dir/unauth.json"
+  grep -q 'authentication required' "$run_dir/unauth.json" \
+    || die "the refusal body is unclear; read $run_dir/unauth.json"
+  unknown="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/unknown")"
+  [ "$unknown" = 401 ] || die "GET /unknown without a token answered $unknown"
+  posted="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$port/ps")"
+  [ "$posted" = 401 ] || die "POST /ps without a token answered $posted"
+  auth="$(curl -s -o "$run_dir/auth.json" -w '%{http_code}' -H 'Authorization: Bearer s3cret-verify-token' "http://127.0.0.1:$port/ps")"
+  [ "$auth" = 200 ] || die "GET /ps with the token answered $auth; read $run_dir/auth.json"
+  if grep -q 's3cret-verify-token' "$run_dir/listen-token.txt" "$run_dir/serve-token.stderr.txt"; then
+    die "the token leaked into the listen block or stderr"
+  fi
+  serve_stop
+
+  step="cleanup"
+  remove_throwaway
+  [ ! -e "$throwaway" ] || die "the throwaway home still exists at $throwaway"
+  say "verify:"
+  say "  feature: $feature"
+  say "  result: ok"
+  say "  evidence: $run_dir"
+  say "help[2]:"
+  say "  Read the unauthenticated refusal at $run_dir/unauth.json"
   say "  Read $run_dir/meta.txt for the doctor facts behind this run"
   exit 0
 fi

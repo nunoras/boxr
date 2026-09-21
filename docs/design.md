@@ -96,8 +96,10 @@ boxr's own lifecycle maps onto the five states rather than adding to them: a tur
 `boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
 A detached supervisor appends a `supervise start <id>` line and a `supervise finish <id> exitCode=<n>` or `supervise error <id> exitCode=<n>` line to `supervisor.log`, so a session whose supervisor never wrote a report still leaves a trace of how it ended.
 The lifecycle lines carry the session id and the exit code and never the prompt or the saved session metadata.
-`boxr serve [--port N]` exposes the same read surface over HTTP as JSON so a fleet view on another machine can poll this host (default port 4035, bind all interfaces).
-The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`; anything that would mutate the ledger is refused with 405.
+`boxr serve [--bind <IP>] [--port N] [--token <secret>]` exposes the same read surface over HTTP as JSON so a fleet view on another machine can poll this host (default port 4035, default bind `127.0.0.1`).
+`--bind` takes exactly one IPv4 or IPv6 address, so the server never starts on whatever a shell expansion happens to produce, and binding anywhere but loopback without a token prints a warning on stderr rather than failing, because the fleet view has a reason to be reachable.
+With `--token`, every request must carry `Authorization: Bearer <secret>` and is refused with 401 before routing when it does not, so an unknown path and a mutation are as protected as a known one, and the secret never reaches the listen output, the help text or a log line.
+The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`; anything that would mutate the ledger is refused with 405 once the request is authenticated.
 The ledger is still written only by the launch and outcome paths on this machine.
 The harness dies with boxr: on Linux it is given `PR_SET_PDEATHSIG`, and on Windows it joins a job object that kills it when boxr exits.
 If that guard cannot be set up, the launch fails and any spawned harness is killed rather than left running unprotected.

@@ -63,7 +63,7 @@ While a session runs, `boxr status` and `boxr wait` report its `lastActivity` an
 
 ## boxr serves a read-only API
 
-`boxr serve` exposes the ledger over HTTP as JSON on port 4035 (configurable with `--port`). The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`. Nothing that mutates is accepted.
+`boxr serve` exposes the ledger over HTTP as JSON on port 4035 (configurable with `--port`), bound to `127.0.0.1` so it is reachable only from this machine. Pass `--bind <ip>` to listen on another address (IPv4 or IPv6); binding off loopback warns on stderr until you also pass `--token <secret>`, after which every request needs an `Authorization: Bearer <secret>` header. The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`. Nothing that mutates is accepted.
 
 ## Get started
 

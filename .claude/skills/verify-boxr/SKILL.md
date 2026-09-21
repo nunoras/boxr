@@ -1,6 +1,6 @@
 ---
 name: verify-boxr
-description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there, the outcomes surface (`boxr outcome <id> success --note <text>` and `boxr outcome --check-reverted <id>`) that reads and updates the summary ledger, and the session cost surface (`currency` and `prices` in config, `apiEquivalentCost` and `currency` in the launch output, `show` and `stats`). Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher, the ledger writer or the outcome commands, or when a harness changes its output format.
+description: Use when proving boxr works against the real harnesses instead of the fakes the black-box suite uses. Covers boxr's headless launch (`boxr --harness claude --model <m> --effort <e> "<prompt>"`) against a throwaway `BOXR_HOME` and the raw ledger it records there, the outcomes surface (`boxr outcome <id> success --note <text>` and `boxr outcome --check-reverted <id>`) that reads and updates the summary ledger, the session cost surface (`currency` and `prices` in config, `apiEquivalentCost` and `currency` in the launch output, `show` and `stats`), and the read-only HTTP surface (`boxr serve --bind --port --token`). Later surface is added to this skill by the tickets that build it. Run it before a release, after changing a harness adapter, the launcher, the ledger writer, the serve listener or the outcome commands, or when a harness changes its output format.
 ---
 
 # verify-boxr
@@ -57,7 +57,9 @@ Read the file for the feature you are proving.
 It carries how to reach the feature, how to drive it, the end state that proves it, and its gotchas.
 
 - [headless-launch](features/headless-launch.md): `boxr --harness claude --model <m> "<prompt>"`, the default blocking mode.
+- [models-and-list](features/models-and-list.md): `boxr models --harness <h>` and `boxr list [--all] [--limit N]`, both without launching anything.
 - [outcomes](features/outcomes.md): `boxr outcome <id> success --note "<text>"` and `boxr outcome --check-reverted <id>`.
+- [serve](features/serve.md): `boxr serve [--bind <IP>] [--port N] [--token <secret>]`, the read-only HTTP view, driven without launching a harness.
 - [session-cost](features/session-cost.md): `currency` and `prices` in `config.json`, recorded in the launch output and read back by `boxr show` and `boxr stats`.
 
 A ticket that adds user-facing surface adds its own feature file, wires a driver into `scripts/verify-boxr.sh`, and extends the frontmatter description as part of its own work.
@@ -66,7 +68,8 @@ A ticket that adds user-facing surface adds its own feature file, wires a driver
 ## Fixed inputs
 
 The driver takes no switches.
-It always drives Claude Code on `haiku` at `--effort low` with a fixed one-line no-tool prompt, kills the session after 300 seconds, and writes evidence under `~/.boxr-verify`.
+When the feature drives a harness it runs Claude Code on `haiku` at `--effort low` with a fixed one-line no-tool prompt, kills the session after 300 seconds, and writes evidence under `~/.boxr-verify`.
+The `models-and-list` and `serve` drives launch no harness and spend no quota.
 The `session-cost` drive additionally writes the price table from its feature file into the throwaway home before the launch.
 
 ## Gotchas
