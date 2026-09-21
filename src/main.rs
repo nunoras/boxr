@@ -28,7 +28,7 @@ use detached::State;
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
 use ledger::{Summary, SummaryUpdate};
-use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
+use output::{one_line, without_terminal_controls, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -1361,6 +1361,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     if message {
         if let Some(text) = &final_message {
+            let text = without_terminal_controls(text);
             print!("{text}");
             if !text.ends_with('\n') {
                 println!();

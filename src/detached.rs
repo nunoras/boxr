@@ -179,10 +179,11 @@ fn observe(
     launch: LaunchFile,
     detail: Detail,
 ) -> Running {
-    let steps = ledger::totals(&session.normalized_path()).steps;
+    let snapshot = ledger::snapshot(&session.normalized_path());
+    let steps = ledger::totals_of(&snapshot).steps;
     let activity = match detail {
-        Detail::Full => crate::activity::inspect(home, session, &launch),
-        Detail::Listing => crate::activity::inspect_ledger(session, &launch),
+        Detail::Full => crate::activity::inspect(home, session, &launch, &snapshot),
+        Detail::Listing => crate::activity::inspect_ledger(session, &launch, &snapshot),
     };
     Running {
         pid,

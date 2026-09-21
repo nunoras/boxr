@@ -56,6 +56,12 @@ fn state_of(stdout: &str) -> String {
     field_of(stdout, "state")
 }
 
+fn activity_of(stdout: &str) -> String {
+    field_of(stdout, "lastActivity")
+        .trim_matches('"')
+        .to_string()
+}
+
 #[test]
 fn the_reported_version_meets_the_minimum_depot_accepts() {
     let harness = Harness::new();
@@ -266,16 +272,13 @@ fn a_running_session_reports_last_activity_and_the_current_tool() {
     harness.hang_for(8, 3000);
 
     let id = detach(&harness, "review");
-    let status = await_status(
-        &harness,
-        &id,
-        &[
-            "currentTool: Read",
-            &format!("lastActivity: \"{TOOLS_FINAL_MESSAGE_TIMESTAMP}\""),
-        ],
-    );
+    let status = await_status(&harness, &id, &["currentTool: Read"]);
     assert!(status.contains("state: running"), "{status}");
     assert!(status.contains("steps: 1"), "{status}");
+    assert!(
+        activity_of(&status).as_str() >= TOOLS_FINAL_MESSAGE_TIMESTAMP,
+        "{status}"
+    );
 
     let again = stdout_of(&harness.run(&["status", &id]));
     assert!(again.contains("steps: 1"), "{again}");
@@ -350,6 +353,52 @@ fn show_truncates_the_final_message_and_message_prints_it_whole() {
     assert!(!raw_stdout.contains("session:"), "{raw_stdout}");
     assert_eq!(raw_stdout.trim_end(), full.trim_end(), "{raw_stdout}");
     assert!(raw_stdout.contains("\n\n"), "{raw_stdout}");
+}
+
+#[test]
+fn last_activity_tracks_a_growing_transcript_during_a_hung_tool_call() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_for(8, 4000);
+    harness.grow_while_hung(100);
+
+    let id = detach(&harness, "review");
+    let first = await_status(&harness, &id, &["currentTool: Read"]);
+    let first_activity = activity_of(&first);
+    sleep(Duration::from_millis(1200));
+
+    let second = stdout_of(&harness.run(&["status", &id]));
+    assert!(second.contains("currentTool: Read"), "{second}");
+    let second_activity = activity_of(&second);
+    assert!(
+        second_activity > first_activity,
+        "lastActivity stayed at {first_activity} and then {second_activity}"
+    );
+
+    let waited = harness.run(&["wait", &id]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+}
+
+#[test]
+fn show_message_strips_terminal_control_characters() {
+    let mut harness = Harness::new();
+    harness.use_fixture("control-chars");
+
+    let launched = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    assert_eq!(launched.status.code(), Some(0), "{}", stderr_of(&launched));
+    let id = session_id_of(&stdout_of(&launched));
+
+    let raw = harness.run(&["show", "--message", &id]);
+    let text = stdout_of(&raw);
+    assert_eq!(raw.status.code(), Some(0), "{}", stderr_of(&raw));
+    assert!(text.contains("clean"), "{text}");
+    assert!(text.contains("second line"), "{text}");
+    assert!(
+        !text
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t'),
+        "{text:?}"
+    );
 }
 
 #[test]

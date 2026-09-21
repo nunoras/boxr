@@ -259,7 +259,8 @@ fn running_status_reports_the_last_activity_and_the_current_tool() {
         let (status, body) = server.authenticated("GET", &format!("/status/{id}"));
         assert_eq!(status, 200, "{body}");
         let value = json_body(&body);
-        if value["currentTool"] == "Read" && value["lastActivity"] == "2026-09-02T03:04:53.666Z" {
+        let activity = value["lastActivity"].as_str().unwrap_or_default();
+        if value["currentTool"] == "Read" && activity >= "2026-09-02T03:04:53.666Z" {
             break value;
         }
         assert!(Instant::now() < deadline, "{value}");
