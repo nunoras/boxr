@@ -78,6 +78,10 @@ pub fn read_launch(session: &Session) -> Result<Option<LaunchFile>> {
     read_record(&session.launch_path())
 }
 
+pub fn read_report(session: &Session) -> Result<Option<Report>> {
+    read_record(&session.report_path())
+}
+
 pub fn record_supervisor(session: &Session, pid: u32) -> Result<()> {
     if std::env::var_os("BOXR_TEST_FAIL_SUPERVISOR_RECORD").is_some() {
         return Err(anyhow!("refusing to record the supervisor"));
@@ -175,10 +179,11 @@ fn observe(
     launch: LaunchFile,
     detail: Detail,
 ) -> Running {
-    let steps = ledger::totals(&session.normalized_path()).steps;
+    let snapshot = ledger::snapshot(&session.normalized_path());
+    let steps = ledger::totals_of(&snapshot).steps;
     let activity = match detail {
-        Detail::Full => crate::activity::inspect(home, session, &launch),
-        Detail::Listing => crate::activity::inspect_ledger(session, &launch),
+        Detail::Full => crate::activity::inspect(home, session, &launch, &snapshot),
+        Detail::Listing => crate::activity::inspect_ledger(session, &launch, &snapshot),
     };
     Running {
         pid,
@@ -347,6 +352,7 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         capture_error: None,
         summary_error: None,
         error: summary.error.clone(),
+        stderr_tail: None,
         limit_hit: summary.limit_hit,
         interrupted: summary.interrupted,
         ledger,
@@ -405,6 +411,7 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         capture_error: totals.error,
         summary_error: None,
         error: None,
+        stderr_tail: None,
         limit_hit: false,
         interrupted: true,
         ledger: Ledger::Interrupted,

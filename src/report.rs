@@ -63,6 +63,8 @@ pub struct Report {
     pub summary_error: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default, rename = "stderrTail")]
+    pub stderr_tail: Option<String>,
     #[serde(default)]
     pub limit_hit: bool,
     #[serde(default)]
@@ -156,6 +158,9 @@ pub fn render(report: &Report, session: &Session) -> String {
     }
     if let Some(error) = &report.error {
         toon.field("error", &one_line(error, MESSAGE_LIMIT));
+    }
+    if let Some(tail) = &report.stderr_tail {
+        toon.field("stderrTail", &one_line(tail, MESSAGE_LIMIT));
     }
     let ledger = toon
         .section("ledger")

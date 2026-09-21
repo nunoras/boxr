@@ -28,7 +28,7 @@ use detached::State;
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
 use ledger::{Summary, SummaryUpdate};
-use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
+use output::{one_line, without_terminal_controls, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -1138,7 +1138,7 @@ fn render_stopped(session: &Session, summary: &Summary, action: &str) -> String 
     toon.section("stop")
         .field("id", &session.id)
         .field("action", action);
-    summarize(&mut toon, summary);
+    summarize(&mut toon, summary, None);
     toon.list(
         "help",
         &[
@@ -1370,6 +1370,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let final_message = resolve_final_message(&session);
     if message {
         if let Some(text) = &final_message {
+            let text = without_terminal_controls(text);
             print!("{text}");
             if !text.ends_with('\n') {
                 println!();
@@ -1380,8 +1381,9 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let truncated = final_message
         .as_deref()
         .map(|text| one_line(text, MESSAGE_LIMIT));
+    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     let mut toon = Toon::new();
-    summarize(&mut toon, &summary);
+    summarize(&mut toon, &summary, stderr_tail.as_deref());
     toon.section("message")
         .optional("text", truncated.as_deref());
     toon.section("files")
@@ -1419,7 +1421,7 @@ fn resolve_final_message(session: &Session) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
-fn summarize(toon: &mut Toon, summary: &Summary) {
+fn summarize(toon: &mut Toon, summary: &Summary, stderr_tail: Option<&str>) {
     toon.section("session")
         .field("id", &summary.id)
         .field("status", &summary.status)
@@ -1456,6 +1458,9 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     }
     if let Some(error) = &summary.error {
         toon.field("error", &one_line(error, MESSAGE_LIMIT));
+    }
+    if let Some(tail) = stderr_tail {
+        toon.field("stderrTail", &one_line(tail, MESSAGE_LIMIT));
     }
     if let Some(evidence) = &summary.git {
         toon.section("git")
