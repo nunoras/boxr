@@ -213,7 +213,14 @@ impl Harness {
     }
 
     pub fn spawn(&self, args: &[&str]) -> Child {
+        self.spawn_with_env(args, &[])
+    }
+
+    pub fn spawn_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Child {
         let mut command = self.command(args, Some(&self.bin_dir));
+        for (name, value) in envs {
+            command.env(name, value);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

@@ -267,7 +267,7 @@ if [ "$feature" = models-and-list ]; then
   step="list"
   "$boxr_bin" list >"$run_dir/list.txt" 2>>"$run_dir/stderr.txt" \
     || die "boxr list failed; read $run_dir/list.txt"
-  grep -q '^list\[0\]{id,state,harness,model,status,start,durationMs,kind,verdict}:' "$run_dir/list.txt" \
+  grep -q '^sessions\[0\]{id,state,harness,model,status,start,durationMs,kind,verdict}:' "$run_dir/list.txt" \
     || die "boxr list has the wrong shape; read $run_dir/list.txt"
 
   step="cleanup"
@@ -306,7 +306,7 @@ if [ "$feature" = serve ]; then
     listen="$run_dir/listen-$label.txt"
     errfile="$run_dir/serve-$label.stderr.txt"
     "$boxr_bin" serve --port 0 "$@" >"$listen" 2>"$errfile" &
-    boxr_pid=$!
+    active_pid=$!
     port=""
     waited=0
     while [ -z "$port" ]; do
@@ -318,9 +318,8 @@ if [ "$feature" = serve ]; then
   }
 
   serve_stop() {
-    kill "$boxr_pid" 2>/dev/null || true
-    wait "$boxr_pid" 2>/dev/null || true
-    boxr_pid=""
+    stop_pid "$active_pid"
+    active_pid=""
   }
 
   step="serve-default"

@@ -228,7 +228,11 @@ enum Command {
         #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_PORT)]
         port: u16,
 
-        #[arg(long, value_name = "TOKEN")]
+        #[arg(
+            long,
+            value_name = "TOKEN",
+            help = "Require this bearer token on every request; prefer the BOXR_SERVE_TOKEN environment variable, which keeps the secret out of the process arguments"
+        )]
         token: Option<String>,
     },
     #[command(name = "__supervise", hide = true)]
@@ -1384,6 +1388,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     })?;
     let session = Session::open(&home, id);
     let final_message = resolve_final_message(&session);
+    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     if message {
         if let Some(text) = &final_message {
             let text = without_terminal_controls(text);
@@ -1397,7 +1402,6 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let truncated = final_message
         .as_deref()
         .map(|text| one_line(text, MESSAGE_LIMIT));
-    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     let mut toon = Toon::new();
     summarize(&mut toon, &summary, stderr_tail.as_deref());
     toon.section("message")
