@@ -29,6 +29,16 @@ impl Toon {
         self
     }
 
+    pub fn optional(&mut self, key: &str, value: Option<&str>) -> &mut Toon {
+        match value {
+            Some(value) => self.field(key, value),
+            None => {
+                let _ = writeln!(self.body, "  {key}: null");
+                self
+            }
+        }
+    }
+
     pub fn number(&mut self, key: &str, value: impl Display) -> &mut Toon {
         let _ = writeln!(self.body, "  {key}: {value}");
         self
