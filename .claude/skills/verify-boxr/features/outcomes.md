@@ -71,7 +71,7 @@ help[2]:
 `<throwaway>/home/summary.jsonl` holds three records: the full summary the launch appended, the field-scoped record `outcome` appended carrying `verdict` and `verdictNote`, and the field-scoped record `--check-reverted` appended carrying `git`.
 Nothing earlier is rewritten.
 
-The evidence directory holds `toon.txt`, `stderr.txt`, `build.log`, `meta.txt` and `raw/` as for a headless launch, plus `outcome.txt`, `show.txt`, `stats.txt` and `reverts.txt`.
+The evidence directory holds what a headless launch leaves, plus `outcome.txt`, `show.txt`, `stats.txt` and `reverts.txt`.
 `meta.txt` also records `gitBase`, the baseline commit the session started from.
 
 ## Gotchas
