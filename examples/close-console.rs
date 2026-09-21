@@ -11,10 +11,8 @@ fn main() -> ExitCode {
     #[link(name = "user32")]
     extern "system" {
         fn PostMessageW(window: isize, message: u32, wparam: usize, lparam: isize) -> i32;
-        fn IsWindowVisible(window: isize) -> i32;
     }
     const WM_CLOSE: u32 = 0x0010;
-    const NO_CLOSABLE_WINDOW: u8 = 3;
 
     let Some(pid) = std::env::args()
         .nth(1)
@@ -30,10 +28,6 @@ fn main() -> ExitCode {
         }
         let window = GetConsoleWindow();
         FreeConsole();
-        if window == 0 || IsWindowVisible(window) == 0 {
-            eprintln!("the console of process {pid} has no window a user could close");
-            return ExitCode::from(NO_CLOSABLE_WINDOW);
-        }
         if window == 0 || PostMessageW(window, WM_CLOSE, 0, 0) == 0 {
             eprintln!("cannot close the console window of process {pid}");
             return ExitCode::FAILURE;

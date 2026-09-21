@@ -1123,7 +1123,6 @@ fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted()
 fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted() {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const NO_CLOSABLE_WINDOW: i32 = 3;
     let mut harness = Harness::new();
     harness.use_fixture("tools");
     harness.hang_after(9);
@@ -1135,12 +1134,6 @@ fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted
         .creation_flags(DETACHED_PROCESS)
         .output()
         .expect("close-console runs");
-    if closed.status.code() == Some(NO_CLOSABLE_WINDOW) {
-        eprintln!("skipped: {}", stderr_of(&closed));
-        let mut child = child;
-        let _ = child.kill();
-        return;
-    }
     assert!(closed.status.success(), "{}", stderr_of(&closed));
     let output = child.wait_with_output().expect("boxr finishes");
 
