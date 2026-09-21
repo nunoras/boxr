@@ -45,7 +45,7 @@ sha256() {
 config_json=""
 sessions_spent=1
 case "$feature" in
-  headless-launch | outcomes | detached) ;;
+  headless-launch | outcomes | remote | detached) ;;
   models-and-list)
     harness=pi
     ;;
@@ -368,6 +368,70 @@ if [ "$feature" = serve ]; then
   say "  evidence: $run_dir"
   say "help[2]:"
   say "  Read the unauthenticated refusal at $run_dir/unauth.json"
+  say "  Read $run_dir/meta.txt for the doctor facts behind this run"
+  exit 0
+fi
+
+if [ "$feature" = remote ]; then
+  step="remote-doctor"
+  host="${BOXR_VERIFY_REMOTE_HOST:-}"
+  [ -n "$host" ] || die "set BOXR_VERIFY_REMOTE_HOST to the ssh host that runs boxr"
+  command -v ssh >/dev/null 2>&1 || die "ssh is not on PATH"
+  BOXR_HOME="$boxr_home"
+  export BOXR_HOME
+  remote_version="$(ssh "$host" boxr --version 2>&1)" || die "ssh to $host cannot run boxr --version; read the error above"
+  case "$remote_version" in
+    boxr\ *) ;;
+    *) die "the remote boxr --version output is unreadable: $remote_version" ;;
+  esac
+  remote_dir="/tmp/boxr-verify-$stamp"
+  ssh "$host" "mkdir -p -- '$remote_dir'" || die "could not create $remote_dir on $host"
+  {
+    printf 'feature: %s\n' "$feature"
+    printf 'runId: %s-%s\n' "$stamp" "$feature"
+    printf 'date: %s\n' "$stamp"
+    printf 'boxrVersion: %s\n' "$boxr_version"
+    printf 'boxrBinary: %s\n' "$boxr_bin"
+    printf 'boxrBinarySha256: %s\n' "$(sha256 "$boxr_bin")"
+    printf 'gitHead: %s\n' "$git_head"
+    printf 'gitDirtyFiles: %s\n' "$git_dirty"
+    printf 'remoteHost: %s\n' "$host"
+    printf 'remoteVersion: %s\n' "$remote_version"
+    printf 'remoteDir: %s\n' "$remote_dir"
+    printf 'throwaway: %s\n' "$throwaway"
+  } >"$meta"
+
+  step="remote-drive"
+  say "verify: launching a real remote session on $host (this spends remote quota)"
+  cd "$work"
+  "$boxr_bin" --remote "$host" --remote-dir "$remote_dir" --harness claude --model haiku --effort low -- "$prompt" \
+    >"$run_dir/toon.txt" 2>"$run_dir/stderr.txt" ||
+    die "boxr --remote failed; read $run_dir/toon.txt and $run_dir/stderr.txt"
+
+  step="remote-evidence"
+  session_id="$(field "$run_dir/toon.txt" id)"
+  [ -n "$session_id" ] || die "the remote launch printed no session id; read $run_dir/toon.txt"
+  grep -q "^  remote: $host$" "$run_dir/toon.txt" || die "the remote launch does not name $host; read $run_dir/toon.txt"
+  grep -q "^  dir: .*boxr-verify-$stamp" "$run_dir/toon.txt" || die "the remote launch does not report the remote directory; read $run_dir/toon.txt"
+  if [ -e "$boxr_home/sessions" ]; then
+    die "a remote launch wrote a local session under $boxr_home"
+  fi
+  ssh "$host" boxr status "$session_id" >"$run_dir/remote-status.txt" 2>&1 ||
+    die "the remote session is not readable; read $run_dir/remote-status.txt"
+  note sessionId "$session_id"
+
+  step="cleanup"
+  ssh "$host" "rm -rf -- '$remote_dir'" || true
+  remove_throwaway
+  [ ! -e "$throwaway" ] || die "the throwaway home still exists at $throwaway"
+  say "verify:"
+  say "  feature: $feature"
+  say "  result: ok"
+  say "  evidence: $run_dir"
+  say "  sessionId: $session_id"
+  say "  remoteHost: $host"
+  say "help[2]:"
+  say "  Read the remote session shape at $run_dir/toon.txt"
   say "  Read $run_dir/meta.txt for the doctor facts behind this run"
   exit 0
 fi

@@ -9,6 +9,24 @@ fn fake_ssh() -> PathBuf {
     example_binary("fake-ssh")
 }
 
+fn numeric_prefix(value: &str) -> u64 {
+    value
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .expect("numeric version part")
+}
+
+fn local_version_parts() -> (u64, u64, u64) {
+    let mut parts = env!("CARGO_PKG_VERSION").split('.');
+    (
+        numeric_prefix(parts.next().expect("major")),
+        numeric_prefix(parts.next().expect("minor")),
+        numeric_prefix(parts.next().expect("patch")),
+    )
+}
+
 fn remote_command(harness: &Harness, extra_env: &[(&str, &str)], args: &[&str]) -> Command {
     let bin = harness.root.path().join("bin");
     let mut command = harness.command(args, Some(&bin));
@@ -61,6 +79,7 @@ fn remote_launch_prints_the_remote_session_id_and_skips_the_local_ledger() {
     let recorded = fs::read_to_string(&args_file).expect("ssh args");
     assert!(recorded.starts_with("box-one\n"), "{recorded}");
     assert!(recorded.contains("boxr --version"), "{recorded}");
+    assert!(!recorded.contains("cd --"), "{recorded}");
     assert!(
         recorded.contains("--detach")
             && recorded.contains("--harness")
@@ -79,9 +98,11 @@ fn remote_launch_prints_the_remote_session_id_and_skips_the_local_ledger() {
 #[test]
 fn remote_launch_rejects_a_version_mismatch() {
     let harness = Harness::new();
+    let (major, minor, patch) = local_version_parts();
+    let remote = format!("{}.{}.{}", major + 1, minor, patch);
     let output = remote_command(
         &harness,
-        &[("BOXR_FAKE_SSH_VERSION", "0.0.1")],
+        &[("BOXR_FAKE_SSH_VERSION", remote.as_str())],
         &[
             "--remote",
             "box-one",
@@ -97,9 +118,268 @@ fn remote_launch_rejects_a_version_mismatch() {
     let stderr = stderr_of(&output);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(
-        stderr.contains("0.0.1") && stderr.contains(env!("CARGO_PKG_VERSION")),
+        stderr.contains(&remote) && stderr.contains(env!("CARGO_PKG_VERSION")),
         "{stderr}"
     );
+    assert!(stderr.contains("box-one"), "{stderr}");
+    assert!(stderr.contains("boxr --version"), "{stderr}");
+}
+
+#[test]
+fn remote_launch_changes_into_a_quoted_remote_directory() {
+    let harness = Harness::new();
+    let args_file = harness.root.path().join("ssh-args.txt");
+    let dir = harness.root.path().join("remote dir's; touch pwned");
+    fs::create_dir_all(&dir).expect("remote dir");
+    let output = remote_command(
+        &harness,
+        &[
+            ("BOXR_FAKE_SSH_ARGS", args_file.to_str().expect("utf8 path")),
+            ("BOXR_FAKE_SSH_SESSION", "remote-abc"),
+        ],
+        &[
+            "--remote",
+            "box-one",
+            "--remote-dir",
+            dir.to_str().expect("utf8 path"),
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("id: remote-abc"), "{stdout}");
+    assert_eq!(path_field_of(&stdout, "dir"), dir);
+    let recorded = fs::read_to_string(&args_file).expect("ssh args");
+    assert!(recorded.contains("cd -- '"), "{recorded}");
+    assert!(
+        recorded.contains("remote dir'\\''s; touch pwned'"),
+        "{recorded}"
+    );
+    assert!(recorded.contains("' && exec boxr --detach"), "{recorded}");
+    assert!(
+        !harness.root.path().join("pwned").exists(),
+        "a metacharacter ran"
+    );
+}
+
+#[test]
+fn remote_launch_refuses_a_missing_remote_directory_without_launching() {
+    let harness = Harness::new();
+    let missing = harness.root.path().join("does-not-exist");
+    let output = remote_command(
+        &harness,
+        &[],
+        &[
+            "--remote",
+            "box-one",
+            "--remote-dir",
+            missing.to_str().expect("utf8 path"),
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}\n{stderr}");
+    assert!(stderr.contains("No such file or directory"), "{stderr}");
+    assert!(stderr.contains("exists on"), "{stderr}");
+    assert!(
+        stderr.contains(missing.to_str().expect("utf8 path")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("boxr --version"), "{stderr}");
+    assert!(!stdout.contains("id:"), "{stdout}");
+}
+
+#[test]
+fn remote_launch_forwards_no_preflight() {
+    let harness = Harness::new();
+    let args_file = harness.root.path().join("ssh-args.txt");
+    let output = remote_command(
+        &harness,
+        &[
+            ("BOXR_FAKE_SSH_ARGS", args_file.to_str().expect("utf8 path")),
+            ("BOXR_FAKE_SSH_SESSION", "remote-abc"),
+        ],
+        &[
+            "--remote",
+            "box-one",
+            "--no-preflight",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    let recorded = fs::read_to_string(&args_file).expect("ssh args");
+    assert!(recorded.contains("--no-preflight"), "{recorded}");
+}
+
+#[test]
+fn remote_launch_accepts_a_patch_version_difference() {
+    let harness = Harness::new();
+    let (major, minor, patch) = local_version_parts();
+    let remote = format!("{}.{}.{}", major, minor, patch + 1);
+    let output = remote_command(
+        &harness,
+        &[("BOXR_FAKE_SSH_VERSION", remote.as_str())],
+        &[
+            "--remote",
+            "box-one",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("id:"), "{stdout}");
+}
+
+#[test]
+fn remote_launch_accepts_a_pre_release_or_build_suffix() {
+    let harness = Harness::new();
+    for remote in [
+        format!("{}-rc.1", env!("CARGO_PKG_VERSION")),
+        format!("{}+build.5", env!("CARGO_PKG_VERSION")),
+    ] {
+        let output = remote_command(
+            &harness,
+            &[("BOXR_FAKE_SSH_VERSION", remote.as_str())],
+            &[
+                "--remote",
+                "box-one",
+                "--harness",
+                "claude",
+                "--model",
+                "opus",
+                "hi",
+            ],
+        )
+        .output()
+        .expect("boxr runs");
+        let stdout = stdout_of(&output);
+        let stderr = stderr_of(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{remote}: {stdout}\n{stderr}"
+        );
+        assert!(stdout.contains("id:"), "{remote}: {stdout}");
+    }
+}
+
+#[test]
+fn remote_launch_rejects_a_malformed_remote_version() {
+    let harness = Harness::new();
+    let output = remote_command(
+        &harness,
+        &[("BOXR_FAKE_SSH_VERSION", "0.3")],
+        &[
+            "--remote",
+            "box-one",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("unreadable version"), "{stderr}");
+    assert!(stderr.contains("box-one"), "{stderr}");
+}
+
+#[test]
+fn remote_launch_rejects_an_incompatible_minor_version() {
+    let harness = Harness::new();
+    let (major, minor, patch) = local_version_parts();
+    let remote = format!("{}.{}.{}", major, minor + 1, patch);
+    let output = remote_command(
+        &harness,
+        &[("BOXR_FAKE_SSH_VERSION", remote.as_str())],
+        &[
+            "--remote",
+            "box-one",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("major and minor"), "{stderr}");
+    assert!(stderr.contains("box-one"), "{stderr}");
+}
+
+#[test]
+fn remote_dir_requires_remote() {
+    let harness = Harness::new();
+    let output = harness.run(&[
+        "--remote-dir",
+        "/srv/app",
+        "--harness",
+        "claude",
+        "--model",
+        "opus",
+        "hi",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr_of(&output));
+}
+
+#[test]
+fn remote_launch_rejects_an_empty_remote_directory() {
+    let harness = Harness::new();
+    let output = remote_command(
+        &harness,
+        &[],
+        &[
+            "--remote",
+            "box-one",
+            "--remote-dir",
+            "",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hi",
+        ],
+    )
+    .output()
+    .expect("boxr runs");
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("needs a path"), "{stderr}");
 }
 
 #[test]

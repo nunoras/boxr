@@ -20,8 +20,9 @@ Add the file in the same ticket that adds the feature, and wire its driver into 
 | account profiles | `boxr account add\|list\|remove`, `--account <name>` | `account-profiles` | [account-profiles.md](account-profiles.md) |
 | ledger reads | `boxr show`, `boxr export --atif`, `boxr stats`, `--kind` | `detached`, `outcomes`, `session-cost` | [ledger-reads.md](ledger-reads.md) |
 | models and list | `boxr models --harness pi`, `boxr list [--all] [--limit N]` | `models-and-list` | [models-and-list.md](models-and-list.md) |
-| serve | `boxr serve [--bind <IP>] [--port N] [--token <secret>]` | `serve` | [serve.md](serve.md) |
 | outcomes | `boxr outcome <id> success --note "<text>"`, `--check-reverted` | `outcomes` | [outcomes.md](outcomes.md) |
+| remote launch | `boxr --remote <host> [--remote-dir <path>] ...` | `remote` | [remote.md](remote.md) |
+| serve | `boxr serve [--bind <IP>] [--port N] [--token <secret>]` | `serve` | [serve.md](serve.md) |
 | session cost | `currency` and `prices` in `config.json` | `session-cost` | [session-cost.md](session-cost.md) |
 
 ## Proof status
@@ -44,10 +45,6 @@ The `headless-launch` and `session-cost` runs above used the previous script, wh
 This surface exists and has no driver yet.
 Its only proof is the black-box suite, against fake harnesses.
 
-- `boxr serve [--port N]`: the read-only HTTP view (`GET /ps`, `/status/<id>`, `/outcome/<id>`), proven by `tests/serve.rs`.
-  A driver would need a free port and a session in the throwaway home, and it binds `0.0.0.0`.
-- `boxr --remote <host>`: an ssh launch that records only on the remote ledger, proven by `tests/remote.rs` with `examples/fake-ssh.rs`.
-  A real drive needs a second machine running the same boxr version.
 - `--harness pi`: the second launch adapter, proven by `tests/pi.rs` and by the pi dogfood in `docs/dogfood-report.md`.
   Every driver here is Claude-only.
 - `boxr account add`: runs the harness's own interactive login, so it needs a human (see [account-profiles.md](account-profiles.md)).
