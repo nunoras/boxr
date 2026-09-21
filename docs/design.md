@@ -155,6 +155,8 @@ They cannot become their own steps: ATIF allows `observation` only on agent step
 So an agent step that carries tool calls is held back until the results for all of its calls have arrived, then appended once with the results folded in as its `observation`.
 Steps without tool calls are appended immediately, and step ids follow append order.
 Liveness lags by tool duration for held steps, and every appended line stays a valid ATIF step.
+A folded result keeps the harness's own error flag as `is_error`, taken from pi's `isError` message field and Claude's `is_error` tool result part.
+The field is written only when the harness stated it, so an explicit false and a missing flag stay distinct and no flag is inferred from the result content.
 When the harness dies before a result arrives, the held step is appended without it before the closing line, so an interrupted session still has a complete, valid file.
 
 ### Secrets

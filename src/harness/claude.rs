@@ -204,6 +204,7 @@ fn tool_results(parts: &[Value]) -> Vec<ObservationResult> {
             Some(ObservationResult {
                 source_call_id: text_at(part, "tool_use_id")?,
                 content: result_content(part.get("content")),
+                is_error: part.get("is_error").and_then(Value::as_bool),
             })
         })
         .collect()
