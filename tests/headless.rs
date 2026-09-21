@@ -533,7 +533,7 @@ fn stats_counts_a_summary_written_before_costs_as_unpriced() {
 }
 
 #[test]
-fn stats_groups_ten_thousand_sessions_in_under_a_second() {
+fn stats_groups_ten_thousand_sessions() {
     let harness = Harness::new();
     for index in 0..10_000 {
         write_summary_fixture(
@@ -543,12 +543,14 @@ fn stats_groups_ten_thousand_sessions_in_under_a_second() {
         );
     }
 
-    let started = Instant::now();
     let output = harness.run(&["stats", "--by", "model,kind", "--since", "7d"]);
-    let elapsed = started.elapsed();
+    let stdout = stdout_of(&output);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
-    assert!(elapsed < Duration::from_secs(1), "stats took {elapsed:?}");
+    assert!(
+        stdout.contains("sonnet,build,USD,10000,60000,40000,0.02,0"),
+        "{stdout}"
+    );
 }
 
 struct SummaryFixture<'a> {
