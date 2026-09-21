@@ -17,6 +17,7 @@ Add the file in the same ticket that adds the feature, and wire its driver into 
 | headless launch | `boxr --harness claude --model <m> "<prompt>"` | [headless-launch.md](headless-launch.md) |
 | models and list | `boxr models --harness pi`, `boxr list [--all] [--limit N]` | [models-and-list.md](models-and-list.md) |
 | outcomes | `boxr outcome <id> success --note "<text>"` | [outcomes.md](outcomes.md) |
+| remote launch | `boxr --remote <host> [--remote-dir <path>] [--require-exact-version] ...` | [remote.md](remote.md) |
 | serve | `boxr serve [--bind <IP>] [--port N] [--token <secret>]` | [serve.md](serve.md) |
 | session cost | `currency` and `prices` in `config.json`, read back by launch, `boxr show` and `boxr stats` | [session-cost.md](session-cost.md) |
 

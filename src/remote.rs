@@ -10,19 +10,49 @@ const LOCAL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct RemoteLaunch {
     pub host: String,
+    pub dir: Option<String>,
     pub harness: String,
     pub model: String,
     pub effort: Option<String>,
     pub account: Option<String>,
     pub kind: Option<String>,
     pub prompt: String,
+    pub exact_version: bool,
+}
+
+struct Version {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl Version {
+    fn parse(text: &str) -> Option<Version> {
+        let mut parts = text.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Version {
+            major,
+            minor,
+            patch,
+        })
+    }
+
+    fn same_release(&self, other: &Version) -> bool {
+        self.major == other.major && self.minor == other.minor
+    }
 }
 
 pub fn launch(request: &RemoteLaunch) -> Result<i32> {
-    probe_version(&request.host)?;
+    validate_dir(request)?;
+    probe_version(&request.host, request.exact_version)?;
     let output = run_ssh(
         &request.host,
-        &build_detach_args(request),
+        &detach_command(request),
         "launching a remote boxr session",
     )?;
     if !output.status.success() {
@@ -53,12 +83,23 @@ pub fn launch(request: &RemoteLaunch) -> Result<i32> {
     Ok(crate::fail::EXIT_OK)
 }
 
-fn probe_version(host: &str) -> Result<()> {
-    let output = run_ssh(
-        host,
-        &["boxr".into(), "--version".into()],
-        "probing remote boxr",
-    )?;
+fn validate_dir(request: &RemoteLaunch) -> Result<()> {
+    match request.dir.as_deref() {
+        Some("") => Err(Fail::usage(
+            "--remote-dir needs a path",
+            vec![
+                "Pass a directory that exists on the remote host, for example `--remote-dir /srv/app`"
+                    .to_string(),
+                "Drop --remote-dir to use the remote login directory".to_string(),
+            ],
+        )
+        .into()),
+        _ => Ok(()),
+    }
+}
+
+fn probe_version(host: &str, exact: bool) -> Result<()> {
+    let output = run_ssh(host, "boxr --version", "probing remote boxr")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
@@ -73,23 +114,57 @@ fn probe_version(host: &str) -> Result<()> {
         )
         .into());
     }
-    let remote = parse_version(&stdout).ok_or_else(|| {
+    let remote_text = parse_version(&stdout).ok_or_else(|| {
         Fail::usage(
             format!("remote boxr on `{host}` did not report a version"),
             vec![format!("ssh to `{host}` and run `boxr --version`")],
         )
     })?;
-    if remote != LOCAL_VERSION {
-        return Err(Fail::usage(
-            format!("remote boxr on `{host}` is {remote}, local is {LOCAL_VERSION}"),
+    let remote = Version::parse(&remote_text).ok_or_else(|| {
+        Fail::usage(
+            format!("remote boxr on `{host}` reported an unreadable version `{remote_text}`"),
             vec![
-                format!("Install boxr {LOCAL_VERSION} on `{host}`"),
-                "Remote launches require the same boxr version on both hosts".to_string(),
+                format!("ssh to `{host}` and run `boxr --version` to see the raw output"),
+                format!("Install boxr {LOCAL_VERSION} on `{host}` and put it on PATH"),
             ],
         )
-        .into());
+    })?;
+    let local = Version::parse(LOCAL_VERSION).ok_or_else(|| {
+        Fail::usage(
+            format!("this boxr build reports an unreadable version `{LOCAL_VERSION}`"),
+            vec!["Reinstall boxr from a released binary".to_string()],
+        )
+    })?;
+    let matches = if exact {
+        remote.major == local.major && remote.minor == local.minor && remote.patch == local.patch
+    } else {
+        remote.same_release(&local)
+    };
+    if matches {
+        return Ok(());
     }
-    Ok(())
+    let requirement = if exact {
+        format!("--require-exact-version needs {LOCAL_VERSION} on `{host}`")
+    } else {
+        "Remote launches need the same major and minor version on both hosts".to_string()
+    };
+    Err(Fail::usage(
+        format!("remote boxr on `{host}` is {remote_text}, local is {LOCAL_VERSION}"),
+        vec![
+            requirement,
+            format!("Run `boxr --remote {host} --require-exact-version` only against an exactly matching build"),
+            format!("Check the remote with `ssh {host} 'boxr --version'`"),
+        ],
+    )
+    .into())
+}
+
+fn detach_command(request: &RemoteLaunch) -> String {
+    let launch = shell_join(&build_detach_args(request));
+    match request.dir.as_deref() {
+        Some(dir) => format!("cd -- {} && exec {}", shell_quote(dir), launch),
+        None => launch,
+    }
 }
 
 fn build_detach_args(request: &RemoteLaunch) -> Vec<String> {
@@ -117,9 +192,8 @@ fn build_detach_args(request: &RemoteLaunch) -> Vec<String> {
     args
 }
 
-fn run_ssh(host: &str, remote_args: &[String], context: &str) -> Result<std::process::Output> {
+fn run_ssh(host: &str, command: &str, context: &str) -> Result<std::process::Output> {
     let program = ssh_program()?;
-    let command = shell_join(remote_args);
     Command::new(&program)
         .arg(host)
         .arg(command)
@@ -209,6 +283,9 @@ fn render_remote(host: &str, id: &str, request: &RemoteLaunch) -> String {
             "effort",
             request.effort.as_deref().unwrap_or("harness-default"),
         );
+    if let Some(dir) = &request.dir {
+        toon.field("dir", dir);
+    }
     toon.list(
         "help",
         &[

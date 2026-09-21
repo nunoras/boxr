@@ -81,6 +81,12 @@ struct Cli {
     #[arg(long, value_name = "HOST")]
     remote: Option<String>,
 
+    #[arg(long, value_name = "PATH", requires = "remote")]
+    remote_dir: Option<String>,
+
+    #[arg(long, requires = "remote")]
+    require_exact_version: bool,
+
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
 }
@@ -384,12 +390,14 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         let _ = adapter_for(&harness_id)?;
         return remote::launch(&remote::RemoteLaunch {
             host: host.to_string(),
+            dir: cli.remote_dir.clone(),
             harness: harness_id,
             model,
             effort,
             account,
             kind,
             prompt,
+            exact_version: cli.require_exact_version,
         });
     }
 

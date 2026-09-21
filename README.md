@@ -49,7 +49,7 @@ While a session runs, `boxr status` and `boxr wait` report its `lastActivity` an
 
 ## boxr launches over SSH
 
-`boxr --remote <host>` probes the remote boxr version, runs a detached launch there, prints the remote session id and exits. The session is recorded in the remote ledger only.
+`boxr --remote <host>` probes the remote boxr version, runs a detached launch there, prints the remote session id and exits. It accepts a patch difference and refuses a major or minor mismatch. `--remote-dir <path>` starts the session in that remote directory, and `--require-exact-version` demands an exact version match. The session is recorded in the remote ledger only.
 
 ## boxr gives you stats
 
