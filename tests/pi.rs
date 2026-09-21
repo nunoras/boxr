@@ -1010,18 +1010,77 @@ fn a_custom_catalog_restricts_which_models_can_launch() {
 }
 
 #[test]
-fn a_failing_catalog_command_fails_the_launch_before_any_session() {
+fn a_failing_catalog_command_warns_once_and_the_launch_proceeds() {
     let mut pi = Pi::new();
     pi.fail_catalog("3");
     let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
     let stderr = stderr_of(&output);
 
-    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: skipping the model preflight for harness `pi`"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("`pi --list-models` failed: exited with 3"),
         "{stderr}"
     );
-    assert!(!pi.boxr_home().join("sessions").exists());
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("warning:"))
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(pi.boxr_home().join("sessions").exists());
+}
+
+#[test]
+fn an_empty_catalog_warns_once_and_the_launch_proceeds() {
+    let mut pi = Pi::new();
+    pi.with_catalog("");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: skipping the model preflight for harness `pi`"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("warning:"))
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(stdout.contains("status: ok"), "{stdout}");
+}
+
+#[test]
+fn no_preflight_skips_the_catalog_and_launches_an_unknown_model() {
+    let mut pi = Pi::new();
+    pi.fail_catalog("3");
+    let output = pi.run(&[
+        "--no-preflight",
+        "--harness",
+        "pi",
+        "--model",
+        "xai/grok-9.9",
+        "hello",
+    ]);
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(stdout.contains("model: xai/grok-9.9"), "{stdout}");
 }
 
 #[test]

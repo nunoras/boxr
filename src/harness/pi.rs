@@ -68,6 +68,12 @@ impl Harness for Pi {
                 model: model.to_string(),
             });
         }
+        if models.is_empty() {
+            return Err(anyhow!(
+                "`{} --list-models` printed no model rows",
+                self.id()
+            ));
+        }
         Ok(models)
     }
 

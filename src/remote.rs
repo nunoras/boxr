@@ -16,6 +16,7 @@ pub struct RemoteLaunch {
     pub account: Option<String>,
     pub kind: Option<String>,
     pub prompt: String,
+    pub no_preflight: bool,
 }
 
 pub fn launch(request: &RemoteLaunch) -> Result<i32> {
@@ -112,6 +113,9 @@ fn build_detach_args(request: &RemoteLaunch) -> Vec<String> {
     if let Some(kind) = &request.kind {
         args.push("--kind".to_string());
         args.push(kind.clone());
+    }
+    if request.no_preflight {
+        args.push("--no-preflight".to_string());
     }
     args.push(request.prompt.clone());
     args

@@ -28,7 +28,8 @@ boxr --harness <h> --model <m> --effort <e> --account <profile> [--kind <k>] "<p
 ```
 
 Harness, model, effort and account are explicit, with defaults from config.
-A single bare word with no launch flag is refused as an unknown command, naming the closest command, so a mistyped subcommand never starts a paid session by accident.
+A single bare word with no launch flag is refused, so a mistyped subcommand never starts a paid session by accident.
+The refusal says the word is not a boxr command and points at `--harness` and `--model` for running it as a prompt; it names the closest command only when the edit distance is small.
 A multiword prompt, or a single-word prompt alongside `--harness`, `--model`, `--detach`, `--remote`, `--effort`, `--account` or `--kind`, still launches.
 
 ### Headless (default)
@@ -131,8 +132,10 @@ A harness may expose its own model catalog, and `boxr models --harness <h> [--ac
 boxr runs the harness's discovery command (for pi, `pi --list-models`), parses the provider and model columns behind the adapter, and never keeps a hardcoded model list or launches a model to discover an id.
 A harness without discovery is a usage error that names the harness, so `boxr models --harness claude` says claude does not expose a catalog rather than printing an empty table.
 For pi, a fresh launch checks the exact `provider/model` against the discovered catalog before the session directory is allocated or the harness is spawned, so an unknown id is a usage error that names the closest full id by deterministic edit distance and creates no session.
+`--no-preflight` skips that check for a single launch.
+A discovery command that cannot run, exits non-zero, or prints nothing parseable is a one-line warning on stderr and the launch proceeds without the check, so a stale or unreadable catalog never blocks a paid run.
+Only a catalog that was read successfully and lacks the model refuses the launch.
 Resume and retry reuse the model the original session recorded, which that session's fresh launch already checked.
-A discovery command that cannot run or exits non-zero fails the launch clearly, so boxr never passes an unvalidated model to a paid run.
 The account's config directory is applied to the discovery command exactly as it is applied to a launch, so a profile sees its own catalog.
 
 ## Accounts: profiles and subscriptions
@@ -169,7 +172,7 @@ Three layers per session:
    When boxr itself is asked to stop, it kills the harness, lets the transcript follower finish, writes the closing line and a summary marked `interrupted`, and only then exits.
    That includes closing the console, logoff and shutdown on Windows, where boxr holds the console control event until the summary is written, within Windows' five second budget for those events.
 
-`boxr list [--all] [--limit N]` reads the folded summary ledger and prints a `sessions[N]{id,state,harness,model,status,start,durationMs,kind,verdict}:` table, newest first by `start`.
+`boxr list [--all] [--limit N]` reads the folded summary ledger and prints a `list[N]{id,state,harness,model,status,start,durationMs,kind,verdict}:` table, newest first by `start`.
 A session whose supervisor is still alive appears once, with `state: running` and `status: running`, even before its summary exists; every other row is `state: finished` with the recorded turn status and the verdict the outcome records folded in.
 The default view shows the 20 most recent sessions.
 `--all` drops the limit unless `--limit` is also given, in which case the explicit limit wins.
