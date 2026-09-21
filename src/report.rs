@@ -56,6 +56,8 @@ pub struct Report {
     pub currency: Option<String>,
     #[serde(default, rename = "costError")]
     pub cost_error: Option<String>,
+    #[serde(default, rename = "costUnpriced")]
+    pub cost_unpriced: bool,
     pub capture_error: Option<String>,
     pub summary_error: Option<String>,
     #[serde(default)]

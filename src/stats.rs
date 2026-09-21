@@ -75,7 +75,8 @@ pub fn render(home: &Path, by: &str, since: &str) -> Result<String> {
                 Some(aggregate.api_equivalent_cost.unwrap_or(0.0) + amount);
         }
         if float_field(&summary, "apiEquivalentCost").is_none()
-            && string_field(&summary, "costError").is_none()
+            && (bool_field(&summary, "costUnpriced")
+                || string_field(&summary, "costError").is_none())
         {
             aggregate.unpriced_sessions += 1;
         }

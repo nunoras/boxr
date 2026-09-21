@@ -199,6 +199,7 @@ Three measures, each labeled:
   Cached input and reasoning tokens are subtotals of the prompt and completion counts the harness reports, so they are priced at their own rate and the rest at the input and output rates: `(prompt - cached) * input + cached * cached + (completion - reasoning) * output + reasoning * reasoning`.
   The reasoning rate maps whatever split the harness reports (Claude's `thinking_tokens`, pi's `reasoning`) onto the table, so a provider that bills thinking as ordinary output needs `reasoning` set equal to `output`.
   A model with no entry in the table records `apiEquivalentCost` as null rather than zero, so an unpriced session is never read as a free one.
+  It also records a `costError` that names the model and a `costUnpriced` flag, so the missing price is visible in the output instead of silent.
   Prices are arithmetic on the table and nothing else; boxr never fetches a price.
 - Quota share: the percentage of a subscription window consumed, from quota readings before and after, split by token share when sessions overlap. Always marked estimated.
 
@@ -206,6 +207,7 @@ Three measures, each labeled:
 
 `boxr stats` is the only source of numbers, for example `boxr stats --by model,kind --since 7d`.
 Each row carries the requested dimensions, the `currency` the cost is in, `sessions`, `tokens`, `durationMs`, the summed `apiEquivalentCost` and `unpricedSessions`, the count of sessions in that group whose model had no price.
+A priced session whose arithmetic failed records a `costError` too, and stats does not count it as unpriced.
 Cost is grouped by currency as well, because adding amounts from different currencies would mean nothing.
 Every visual view (a Lavish report, a later dashboard) is built on its output rather than querying the ledger itself.
 Stats is a direct pass over the summary JSONL: fold each session's records in order, filter by `--since`, group by the requested dimensions plus currency, and emit the TOON table.
