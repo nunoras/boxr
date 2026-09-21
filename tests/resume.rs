@@ -30,7 +30,7 @@ fn resuming_a_finished_session_continues_it_in_resume_mode() {
     let mut harness = Harness::new();
     harness.record_args();
     harness.write_config(r#"{"defaults":{"harness":"claude","model":"sonnet","effort":"high"}}"#);
-    let parent = launch(&harness, &["hello"]);
+    let parent = launch(&harness, &["hello there"]);
 
     let resumed = resume(&harness, &parent, "and now?");
     let stdout = stdout_of(&resumed);

@@ -15,6 +15,7 @@ Add the file in the same ticket that adds the feature, and wire its driver into 
 | feature | command surface | file |
 |---|---|---|
 | headless launch | `boxr --harness claude --model <m> "<prompt>"` | [headless-launch.md](headless-launch.md) |
+| models and list | `boxr models --harness pi`, `boxr list [--all] [--limit N]` | [models-and-list.md](models-and-list.md) |
 | outcomes | `boxr outcome <id> success --note "<text>"` | [outcomes.md](outcomes.md) |
 | session cost | `currency` and `prices` in `config.json`, read back by launch, `boxr show` and `boxr stats` | [session-cost.md](session-cost.md) |
 

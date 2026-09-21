@@ -17,6 +17,8 @@ struct Pi {
     exit_code: String,
     stderr: Option<String>,
     fixture: &'static str,
+    catalog: Option<String>,
+    catalog_exit: Option<String>,
 }
 
 impl Pi {
@@ -36,6 +38,8 @@ impl Pi {
             exit_code: "0".to_string(),
             stderr: None,
             fixture: "hello",
+            catalog: None,
+            catalog_exit: None,
         }
     }
 
@@ -84,6 +88,14 @@ impl Pi {
         self.stderr = Some(text.to_string());
     }
 
+    fn with_catalog(&mut self, content: &str) {
+        self.catalog = Some(content.to_string());
+    }
+
+    fn fail_catalog(&mut self, code: &str) {
+        self.catalog_exit = Some(code.to_string());
+    }
+
     fn recorded_args(&self) -> Vec<String> {
         fs::read_to_string(&self.args_file)
             .expect("recorded args")
@@ -113,6 +125,14 @@ impl Pi {
             .env("BOXR_FAKE_PI_PROMPT", &self.prompt_file);
         if let Some(stderr) = &self.stderr {
             command.env("BOXR_FAKE_PI_STDERR", stderr);
+        }
+        if let Some(catalog) = &self.catalog {
+            let path = self.root.path().join("models.txt");
+            fs::write(&path, catalog).expect("fake catalog");
+            command.env("BOXR_FAKE_PI_MODELS", path);
+        }
+        if let Some(code) = &self.catalog_exit {
+            command.env("BOXR_FAKE_PI_MODELS_EXIT", code);
         }
         command.output().expect("boxr runs")
     }
@@ -814,6 +834,133 @@ fn resuming_a_pi_continuation_keeps_the_origin_harness_dir() {
     let steps = steps_of(&lines);
     assert_eq!(sources_of(steps), ["user", "agent"]);
     assert_eq!(steps[1]["message"], "follow-up answered by boxr fixture");
+}
+
+#[test]
+fn models_lists_the_catalog_the_harness_advertises() {
+    let pi = Pi::new();
+    let output = pi.run(&["models", "--harness", "pi"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(stdout.contains("models[3]{provider,model}:"), "{stdout}");
+    assert!(stdout.contains("  xai,grok-4.5"), "{stdout}");
+    assert!(stdout.contains("  anthropic,claude-sonnet-4-5"), "{stdout}");
+    assert!(!pi.boxr_home().join("sessions").exists());
+}
+
+#[test]
+fn a_harness_without_a_catalog_reports_unsupported_models() {
+    let pi = Pi::new();
+    let output = pi.run(&["models", "--harness", "claude"]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("harness `claude` does not expose a model catalog"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_known_model_from_the_catalog_launches() {
+    let pi = Pi::new();
+    let output = pi.run(&[
+        "--harness",
+        "pi",
+        "--model",
+        "anthropic/claude-sonnet-4-5",
+        "hello",
+    ]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    assert!(
+        stdout.contains("model: anthropic/claude-sonnet-4-5"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn an_unknown_model_is_a_usage_error_that_creates_no_session() {
+    let pi = Pi::new();
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.50", "hello"]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("unknown model `xai/grok-4.50` for harness `pi`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Did you mean `xai/grok-4.5`?"), "{stderr}");
+    assert!(!pi.boxr_home().join("sessions").exists());
+}
+
+#[test]
+fn a_custom_catalog_restricts_which_models_can_launch() {
+    let mut pi = Pi::new();
+    pi.with_catalog("provider      model\nxai           grok-4.5\n");
+
+    let unknown = pi.run(&[
+        "--harness",
+        "pi",
+        "--model",
+        "anthropic/claude-sonnet-4-5",
+        "hello",
+    ]);
+    assert_eq!(unknown.status.code(), Some(2), "{}", stderr_of(&unknown));
+    assert!(!pi.boxr_home().join("sessions").exists());
+
+    let known = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    assert_eq!(
+        known.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&known)
+    );
+}
+
+#[test]
+fn a_failing_catalog_command_fails_the_launch_before_any_session() {
+    let mut pi = Pi::new();
+    pi.fail_catalog("3");
+    let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("`pi --list-models` failed: exited with 3"),
+        "{stderr}"
+    );
+    assert!(!pi.boxr_home().join("sessions").exists());
+}
+
+#[test]
+fn a_detached_launch_preflights_the_model_before_allocating_a_session() {
+    let pi = Pi::new();
+    let output = pi.run(&[
+        "--detach",
+        "--harness",
+        "pi",
+        "--model",
+        "xai/grok-4.50",
+        "hello",
+    ]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("unknown model `xai/grok-4.50`"), "{stderr}");
+    assert!(!pi.boxr_home().join("sessions").exists());
 }
 
 fn session_file_in(dir: &std::path::Path, session_id: &str) -> PathBuf {

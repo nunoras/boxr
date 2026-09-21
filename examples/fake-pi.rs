@@ -13,8 +13,29 @@ const ARGS_ENV: &str = "BOXR_FAKE_PI_ARGS";
 const PROMPT_ENV: &str = "BOXR_FAKE_PI_PROMPT";
 const DELAY_ENV: &str = "BOXR_FAKE_PI_DELAY_MS";
 const STDERR_ENV: &str = "BOXR_FAKE_PI_STDERR";
+const MODELS_ENV: &str = "BOXR_FAKE_PI_MODELS";
+const MODELS_EXIT_ENV: &str = "BOXR_FAKE_PI_MODELS_EXIT";
+const MODELS_STDERR_ENV: &str = "BOXR_FAKE_PI_MODELS_STDERR";
+
+const DEFAULT_CATALOG: &str = "\
+provider      model                    context  max-out  thinking  images
+xai           grok-4.5                 500K     500K     yes       yes
+xai           grok-4.6                 500K     500K     yes       yes
+anthropic     claude-sonnet-4-5        1M       64K      yes       yes
+";
 
 fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if let Some(path) = env::var_os(ARGS_ENV) {
+        if let Err(error) = fs::write(PathBuf::from(path), args.join("\n")) {
+            eprintln!("cannot record arguments: {error}");
+            return ExitCode::from(97);
+        }
+    }
+    if args.iter().any(|arg| arg == "--list-models") {
+        return list_models();
+    }
+
     let fixture = match env::var_os(FIXTURE_ENV) {
         Some(value) => PathBuf::from(value),
         None => {
@@ -151,6 +172,33 @@ fn option(args: &[String], name: &str) -> Option<String> {
         .position(|arg| arg == name)
         .and_then(|index| args.get(index + 1))
         .cloned()
+}
+
+fn list_models() -> ExitCode {
+    if let Ok(text) = env::var(MODELS_STDERR_ENV) {
+        if !text.is_empty() {
+            eprintln!("{text}");
+        }
+    }
+    if let Ok(value) = env::var(MODELS_EXIT_ENV) {
+        if let Ok(code) = value.parse::<u8>() {
+            if code != 0 {
+                return ExitCode::from(code);
+            }
+        }
+    }
+    let catalog = match env::var_os(MODELS_ENV) {
+        Some(path) if !path.is_empty() => match fs::read_to_string(PathBuf::from(path)) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("cannot read the fake model catalog: {error}");
+                return ExitCode::from(97);
+            }
+        },
+        _ => DEFAULT_CATALOG.to_string(),
+    };
+    print!("{catalog}");
+    ExitCode::from(0)
 }
 
 fn header_value(stream: &str, key: &str) -> Option<String> {

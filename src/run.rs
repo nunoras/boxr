@@ -224,6 +224,52 @@ fn program_of(
     })
 }
 
+pub fn model_catalog(
+    harness: &dyn Harness,
+    account: Option<&Path>,
+) -> Result<Option<Vec<crate::harness::CatalogModel>>> {
+    let Some(mut command) = harness.models_command() else {
+        return Ok(None);
+    };
+    apply_config_dir(&mut command, harness, account);
+    let program = locate(&command.program).ok_or_else(|| {
+        Fail::harness_unavailable(
+            format!(
+                "harness executable `{}` was not found on PATH",
+                command.program
+            ),
+            vec![format!(
+                "Install {} or put its executable on PATH",
+                harness.id()
+            )],
+        )
+    })?;
+    let line = format!("{} {}", command.program, command.args.join(" "));
+    let output = Command::new(&program)
+        .args(&command.args)
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("running `{line}`"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = crate::output::one_line(stderr.trim(), crate::output::MESSAGE_LIMIT);
+        let detail = match detail.is_empty() {
+            true => format!("exited with {}", exit_code_of(&output.status)),
+            false => detail,
+        };
+        return Err(Fail::harness_unavailable(
+            format!("`{line}` failed: {detail}"),
+            vec![format!("Run `{line}` by hand to check the harness catalog")],
+        )
+        .into());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(Some(harness.parse_models(&stdout)?))
+}
+
 struct Supervised(Child);
 
 impl Drop for Supervised {
