@@ -31,8 +31,8 @@ A driver counts as proven once a run of it exited 0 and its evidence is under `~
 | `headless-launch` | `20260915T145857Z-headless-launch` |
 | `session-cost` | `20260917T224959Z-session-cost` |
 | `detached` | `20260921T154324Z-detached` |
-| `outcomes` | no run under the current script yet |
-| `resume` | no run yet |
+| `outcomes` | `20260921T162241Z-outcomes` |
+| `resume` | `20260921T162228Z-resume` |
 | `account-profiles` | `20260921T161215Z-account-profiles`, exit 0; logged-in launch proven by hand |
 
 The `headless-launch` and `session-cost` runs above used the previous script, which kept the launch output as `toon.txt` and the raw layers at `raw/`; the drive itself is unchanged.

@@ -39,7 +39,9 @@ That is one real Claude Code session on the machine's normal login; the four out
 
 ## End state
 
-The launch prints the `session:` result with `exitCode: 0` and a `git:` section carrying `repo` and `commits: 0`, because the baseline commit is both the launch `HEAD` and the exit `HEAD`.
+The launch prints the `session:` result with `exitCode: 0`.
+`show` carries the `git:` section with `repo` and `commits: 0`, because the baseline commit is both the launch `HEAD` and the exit `HEAD`.
+The launch output itself has no `git:` section.
 
 `outcome` prints the `outcome:` section:
 
