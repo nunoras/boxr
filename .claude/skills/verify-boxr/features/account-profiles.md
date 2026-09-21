@@ -59,7 +59,8 @@ BOXR_HOME=<throwaway>/home boxr account remove --harness claude --name verify --
 ## Gotchas
 
 - The doctor refuses to run this driver when `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` is set, because Claude Code would log in from the environment, the launch would succeed, and it would spend quota.
-- A logged-in profile launch is not driven.
-  Proving it means a human runs `boxr account add --harness claude --name verify` against a throwaway `BOXR_HOME`, completes the login, and then runs the `headless-launch` command with `--account verify` from the same shell.
-  Its transcript then lands under `<throwaway>/home/accounts/claude/verify/projects/`, not `~/.claude/projects/`.
+- A logged-in profile launch is not driven, because `account add` needs a human at a browser.
+  It was proven by hand on 2026-09-21: after `boxr account add --harness claude --name work`, `boxr --harness claude --model opus --account work "say hi"` exited 0 with `account: work`.
+  Its transcript landed under `accounts/claude/work/projects/`, and nothing was written to `~/.claude/projects/`.
+  To repeat it, run the same two commands against a throwaway `BOXR_HOME` and check both places.
 - pi profiles use `PI_CODING_AGENT_DIR`; no driver covers them.
