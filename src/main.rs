@@ -39,6 +39,12 @@ use std::time::{Duration, Instant};
 
 const STOP_BUDGET: Duration = Duration::from_secs(10);
 const KILL_BUDGET: Duration = Duration::from_secs(5);
+const DEFAULT_LIST_LIMIT: usize = 20;
+
+const COMMANDS: &[&str] = &[
+    "show", "export", "account", "ps", "status", "wait", "tail", "stop", "resume", "retry",
+    "outcome", "stats", "list", "models", "serve", "skill",
+];
 
 #[derive(Parser, Debug)]
 #[command(
@@ -192,6 +198,27 @@ enum Command {
         #[arg(long, value_name = "WINDOW")]
         since: String,
     },
+    /// List sessions from the folded summary ledger, newest first
+    ///
+    /// The default view shows the 20 most recent sessions. `--all` shows every
+    /// session unless `--limit` is also given, in which case the explicit limit wins.
+    List {
+        #[arg(long)]
+        all: bool,
+
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+    /// List the model ids a harness advertises through its own CLI
+    ///
+    /// A harness that cannot list its models is a usage error rather than an empty table.
+    Models {
+        #[arg(long, value_name = "HARNESS")]
+        harness: Option<String>,
+
+        #[arg(long, value_name = "NAME")]
+        account: Option<String>,
+    },
     Serve {
         #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_PORT)]
         port: u16,
@@ -311,6 +338,8 @@ fn dispatch() -> Result<i32> {
             note,
         }) => outcome(check_reverted, id, verdict, note),
         Some(Command::Stats { by, since }) => stats(&home, &by, &since),
+        Some(Command::List { all, limit }) => list(&home, all, limit),
+        Some(Command::Models { harness, account }) => models(harness, account, &home, &config),
         Some(Command::Serve { port }) => serve::run(port),
         Some(Command::Supervise { id }) => supervise(&id),
         None => launch(cli, &home, &config),
@@ -324,6 +353,7 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
             vec!["Run `boxr --harness claude --model <m> \"<prompt>\"`".to_string()],
         )
     })?;
+    refuse_bare_command(&cli, &prompt)?;
 
     let harness_id = resolve(
         "harness",
@@ -367,6 +397,8 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         kind,
         kind_source,
     };
+
+    preflight_model(&adapter, &request.model, profile.as_deref())?;
 
     if cli.detach {
         let launch = run::prepare(&adapter, &request, home)?;
@@ -583,6 +615,223 @@ fn adapter_for(harness_id: &str) -> Result<std::sync::Arc<dyn harness::Harness>>
         )
         .into()
     })
+}
+
+fn refuse_bare_command(cli: &Cli, prompt: &str) -> Result<()> {
+    if prompt.split_whitespace().count() != 1 {
+        return Ok(());
+    }
+    let explicit = cli.harness.is_some()
+        || cli.model.is_some()
+        || cli.effort.is_some()
+        || cli.account.is_some()
+        || cli.kind.is_some()
+        || cli.detach
+        || cli.remote.is_some();
+    if explicit {
+        return Ok(());
+    }
+    let launch_help =
+        format!("Pass `--harness <h> --model <m>` to launch \"{prompt}\" as a prompt");
+    let mut help = Vec::new();
+    if let Some(command) = harness::closest_match(COMMANDS.iter().copied(), prompt) {
+        help.push(format!("Did you mean `{command}`?"));
+    }
+    help.push(launch_help);
+    Err(Fail::usage(format!("unknown command `{prompt}`"), help).into())
+}
+
+fn preflight_model(
+    adapter: &std::sync::Arc<dyn harness::Harness>,
+    model: &str,
+    account: Option<&Path>,
+) -> Result<()> {
+    let Some(catalog) = run::model_catalog(adapter.as_ref(), account)? else {
+        return Ok(());
+    };
+    if catalog.iter().any(|entry| entry.full_id() == model) {
+        return Ok(());
+    }
+    let closest = harness::closest_match(catalog.iter().map(|entry| entry.full_id()), model);
+    let mut help = Vec::new();
+    if let Some(id) = closest {
+        help.push(format!("Did you mean `{id}`?"));
+    }
+    help.push(format!(
+        "Run `boxr models --harness {}` to list every model it offers",
+        adapter.id()
+    ));
+    Err(Fail::usage(
+        format!("unknown model `{model}` for harness `{}`", adapter.id()),
+        help,
+    )
+    .into())
+}
+
+fn models(
+    harness: Option<String>,
+    account: Option<String>,
+    home: &Path,
+    config: &Config,
+) -> Result<i32> {
+    let harness_id = resolve("harness", harness, config.defaults.harness.clone(), home)?;
+    let adapter = adapter_for(&harness_id)?;
+    let profile = match &account {
+        Some(name) => Some(profile_for(adapter.as_ref(), home, &harness_id, name)?),
+        None => None,
+    };
+    let catalog = run::model_catalog(adapter.as_ref(), profile.as_deref())?.ok_or_else(|| {
+        Fail::usage(
+            format!("harness `{harness_id}` does not expose a model catalog"),
+            vec![
+                "Run `boxr models --harness <h>` for a harness that lists its own models"
+                    .to_string(),
+            ],
+        )
+    })?;
+    let rows: Vec<Vec<String>> = catalog
+        .iter()
+        .map(|entry| vec![entry.provider.clone(), entry.model.clone()])
+        .collect();
+    let mut toon = Toon::new();
+    toon.table(
+        "models",
+        &["provider", "model"],
+        &rows,
+        &[Kind::Text, Kind::Text],
+    );
+    toon.list(
+        "help",
+        &[format!(
+            "Run `boxr --harness {harness_id} --model <provider/model> \"<prompt>\"` to launch with one"
+        )],
+    );
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+struct ListEntry {
+    id: String,
+    state: String,
+    harness: String,
+    model: String,
+    status: String,
+    start: String,
+    start_millis: u128,
+    duration_ms: u64,
+    kind: String,
+    verdict: String,
+}
+
+fn list(home: &Path, all: bool, limit: Option<usize>) -> Result<i32> {
+    let mut entries = list_entries(home)?;
+    let limit = match limit {
+        Some(limit) => Some(limit),
+        None if all => None,
+        None => Some(DEFAULT_LIST_LIMIT),
+    };
+    if let Some(limit) = limit {
+        entries.truncate(limit);
+    }
+    let rows: Vec<Vec<String>> = entries
+        .into_iter()
+        .map(|entry| {
+            vec![
+                entry.id,
+                entry.state,
+                entry.harness,
+                entry.model,
+                entry.status,
+                entry.start,
+                entry.duration_ms.to_string(),
+                entry.kind,
+                entry.verdict,
+            ]
+        })
+        .collect();
+    let mut toon = Toon::new();
+    toon.table(
+        "sessions",
+        &[
+            "id",
+            "state",
+            "harness",
+            "model",
+            "status",
+            "start",
+            "durationMs",
+            "kind",
+            "verdict",
+        ],
+        &rows,
+        &[
+            Kind::Text,
+            Kind::Text,
+            Kind::Text,
+            Kind::Text,
+            Kind::Text,
+            Kind::Text,
+            Kind::Number,
+            Kind::Text,
+            Kind::Text,
+        ],
+    );
+    toon.list(
+        "help",
+        &[
+            "Run `boxr show <id>` to read one session".to_string(),
+            "Run `boxr list --all` to include every session".to_string(),
+        ],
+    );
+    print!("{}", toon.render());
+    Ok(EXIT_OK)
+}
+
+fn list_entries(home: &Path) -> Result<Vec<ListEntry>> {
+    let mut entries: Vec<ListEntry> = ledger::summaries(home)?
+        .into_iter()
+        .map(|summary| ListEntry {
+            id: summary.id,
+            state: "finished".to_string(),
+            harness: summary.harness,
+            model: summary.model,
+            status: summary.status,
+            start: summary.start.clone(),
+            start_millis: clock::parse_iso8601(&summary.start).unwrap_or(0),
+            duration_ms: summary.duration_ms,
+            kind: summary.kind.unwrap_or_else(|| "unclassified".to_string()),
+            verdict: summary.verdict.unwrap_or_else(|| "none".to_string()),
+        })
+        .collect();
+    for id in Session::ids(home)? {
+        let session = Session::open(home, &id);
+        if !detached::running(&session)? {
+            continue;
+        }
+        let Some(launch) = detached::read_launch(&session)? else {
+            continue;
+        };
+        entries.retain(|entry| entry.id != id);
+        entries.push(ListEntry {
+            id,
+            state: "running".to_string(),
+            harness: launch.harness,
+            model: launch.model,
+            status: "running".to_string(),
+            start: clock::iso8601(launch.started_millis as u128),
+            start_millis: launch.started_millis as u128,
+            duration_ms: 0,
+            kind: launch.kind.unwrap_or_else(|| "unclassified".to_string()),
+            verdict: "none".to_string(),
+        });
+    }
+    entries.sort_by(|left, right| {
+        right
+            .start_millis
+            .cmp(&left.start_millis)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    Ok(entries)
 }
 
 fn profile_for(

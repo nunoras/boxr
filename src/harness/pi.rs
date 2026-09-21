@@ -1,6 +1,6 @@
 use super::json::{joined_reasoning, joined_text, number_at, text_at};
 use super::{
-    Harness, HarnessCommand, HarnessSession, LaunchMode, LaunchRequest, StreamEvent,
+    CatalogModel, Harness, HarnessCommand, HarnessSession, LaunchMode, LaunchRequest, StreamEvent,
     TranscriptEntry,
 };
 use crate::atif::{Metrics, ObservationResult, Step, ToolCall};
@@ -42,6 +42,33 @@ impl Harness for Pi {
             stdin: Some(request.prompt.clone()),
             env: Vec::new(),
         })
+    }
+
+    fn models_command(&self) -> Option<HarnessCommand> {
+        Some(HarnessCommand {
+            program: "pi".to_string(),
+            args: vec!["--list-models".to_string()],
+            stdin: None,
+            env: Vec::new(),
+        })
+    }
+
+    fn parse_models(&self, output: &str) -> Result<Vec<CatalogModel>> {
+        let mut models = Vec::new();
+        for line in output.lines() {
+            let mut fields = line.split_whitespace();
+            let (Some(provider), Some(model)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            if provider == "provider" {
+                continue;
+            }
+            models.push(CatalogModel {
+                provider: provider.to_string(),
+                model: model.to_string(),
+            });
+        }
+        Ok(models)
     }
 
     fn parse_event(&self, line: &str) -> StreamEvent {

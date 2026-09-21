@@ -548,6 +548,44 @@ pub fn read_summary(home: &Path, id: &str) -> Result<Summary> {
     find_summary(home, id)?.ok_or_else(|| anyhow!("no session {id} in the ledger"))
 }
 
+pub fn summaries(home: &Path) -> Result<Vec<Summary>> {
+    let path = home.join(SUMMARY_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
+        }
+    };
+    let mut order: Vec<String> = Vec::new();
+    let mut folded: std::collections::HashMap<String, Summary> = std::collections::HashMap::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(id) = value.get("id").and_then(Value::as_str).map(str::to_string) else {
+            continue;
+        };
+        if value.get("status").is_some() {
+            if let Ok(record) = serde_json::from_value::<Summary>(value) {
+                if !folded.contains_key(&id) {
+                    order.push(id.clone());
+                }
+                folded.insert(id, record);
+            }
+        } else if let (Some(summary), Ok(update)) = (
+            folded.get_mut(&id),
+            serde_json::from_value::<SummaryUpdate>(value),
+        ) {
+            update.apply(summary);
+        }
+    }
+    Ok(order
+        .into_iter()
+        .filter_map(|id| folded.remove(&id))
+        .collect())
+}
+
 pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
     let path = home.join(SUMMARY_FILE);
     let text = match fs::read_to_string(&path) {

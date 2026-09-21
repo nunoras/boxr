@@ -86,7 +86,7 @@ fn harness_model_and_effort_fall_back_to_config_defaults() {
     let mut harness = Harness::new();
     harness.record_args();
     harness.write_config(r#"{"defaults":{"harness":"claude","model":"opus","effort":"high"}}"#);
-    let output = harness.run(&["hello"]);
+    let output = harness.run(&["hello there"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(

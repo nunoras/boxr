@@ -46,6 +46,9 @@ config_json=""
 sessions_spent=1
 case "$feature" in
   headless-launch | outcomes | detached) ;;
+  models-and-list)
+    harness=pi
+    ;;
   session-cost)
     config_json='{"currency":"USD","prices":{"haiku":{"input":2.0,"output":6.0,"cached":0.3,"reasoning":60.0}}}'
     ;;
@@ -228,6 +231,56 @@ boxr_bin="$repo_root/target/release/boxr"
 boxr_version="$("$boxr_bin" --version)"
 git_head="$(cd "$repo_root" && git rev-parse HEAD)"
 git_dirty="$(cd "$repo_root" && git status --porcelain | wc -l | tr -d ' ')"
+
+if [ "$feature" = models-and-list ]; then
+  step="models"
+  BOXR_HOME="$boxr_home"
+  export BOXR_HOME
+  harness_path="$(command -v pi || true)"
+  [ -n "$harness_path" ] || die "pi is not on PATH"
+  {
+    printf 'feature: %s\n' "$feature"
+    printf 'runId: %s-%s\n' "$stamp" "$feature"
+    printf 'date: %s\n' "$stamp"
+    printf 'boxrVersion: %s\n' "$boxr_version"
+    printf 'boxrBinary: %s\n' "$boxr_bin"
+    printf 'boxrBinarySha256: %s\n' "$(sha256 "$boxr_bin")"
+    printf 'gitHead: %s\n' "$git_head"
+    printf 'gitDirtyFiles: %s\n' "$git_dirty"
+    printf 'harness: pi\n'
+    printf 'harnessPath: %s\n' "$harness_path"
+    printf 'throwaway: %s\n' "$throwaway"
+  } >"$meta"
+
+  say "verify: reading the pi model catalog (no model is launched)"
+  "$boxr_bin" models --harness pi >"$run_dir/models.txt" 2>"$run_dir/stderr.txt" \
+    || die "boxr models --harness pi failed; read $run_dir/models.txt"
+  grep -q '^models\[' "$run_dir/models.txt" || die "boxr models printed no models table"
+  grep -q '^  [a-z0-9-]*,[a-z0-9.-]*$' "$run_dir/models.txt" || die "boxr models printed no provider,model rows"
+
+  "$boxr_bin" models --harness claude >"$run_dir/unsupported.txt" 2>&1 && \
+    die "boxr models --harness claude should be a usage error"
+  grep -q 'does not expose a model catalog' "$run_dir/unsupported.txt" \
+    || die "the unsupported-harness error is unclear; read $run_dir/unsupported.txt"
+
+  step="list"
+  "$boxr_bin" list >"$run_dir/list.txt" 2>>"$run_dir/stderr.txt" \
+    || die "boxr list failed; read $run_dir/list.txt"
+  grep -q '^sessions\[0\]{id,state,harness,model,status,start,durationMs,kind,verdict}:' "$run_dir/list.txt" \
+    || die "boxr list has the wrong shape; read $run_dir/list.txt"
+
+  step="cleanup"
+  remove_throwaway
+  [ ! -e "$throwaway" ] || die "the throwaway home still exists at $throwaway"
+  say "verify:"
+  say "  feature: $feature"
+  say "  result: ok"
+  say "  evidence: $run_dir"
+  say "help[2]:"
+  say "  Read the model table at $run_dir/models.txt"
+  say "  Read $run_dir/meta.txt for the doctor facts behind this run"
+  exit 0
+fi
 
 harness_path="$(command -v "$harness" || true)"
 [ -n "$harness_path" ] || die "harness '$harness' is not on PATH"

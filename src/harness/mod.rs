@@ -39,6 +39,18 @@ pub struct HarnessCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogModel {
+    pub provider: String,
+    pub model: String,
+}
+
+impl CatalogModel {
+    pub fn full_id(&self) -> String {
+        format!("{}/{}", self.provider, self.model)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
     SessionStarted {
         harness_session_id: String,
@@ -72,6 +84,15 @@ pub trait Harness: Send + Sync {
     fn config_dir_env(&self) -> Option<&'static str> {
         None
     }
+    fn models_command(&self) -> Option<HarnessCommand> {
+        None
+    }
+    fn parse_models(&self, _output: &str) -> Result<Vec<CatalogModel>> {
+        Err(anyhow!(
+            "harness `{}` cannot parse a model catalog",
+            self.id()
+        ))
+    }
     fn parse_event(&self, line: &str) -> StreamEvent;
     fn transcript(
         &self,
@@ -104,4 +125,45 @@ pub fn lookup(id: &str) -> Option<Arc<dyn Harness>> {
 
 pub fn known_ids() -> &'static [&'static str] {
     &["claude", "pi"]
+}
+
+pub fn closest_match<I, S>(candidates: I, target: &str) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut best: Option<(usize, String)> = None;
+    for candidate in candidates {
+        let candidate = candidate.as_ref();
+        let distance = edit_distance(candidate, target);
+        let replace = match &best {
+            None => true,
+            Some((best_distance, best_text)) => {
+                distance < *best_distance
+                    || (distance == *best_distance && candidate < best_text.as_str())
+            }
+        };
+        if replace {
+            best = Some((distance, candidate.to_string()));
+        }
+    }
+    best.map(|(_, text)| text)
+}
+
+pub fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (row, left_char) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = if left_char == right_char { 0 } else { 1 };
+            current[column + 1] = (previous[column + 1] + 1)
+                .min(current[column] + 1)
+                .min(previous[column] + substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
 }
