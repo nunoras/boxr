@@ -1,11 +1,29 @@
 mod common;
 
 use common::*;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 const MINIMUM_VERSION: (u64, u64, u64) = (0, 2, 0);
 const REQUIRED_COMMANDS: [&str; 5] = ["ps", "status", "wait", "stop", "resume"];
 const REQUIRED_FLAGS: [&str; 2] = ["--detach", "--remote"];
 const DEPOT_STATES: [&str; 5] = ["running", "finished", "stopped", "interrupted", "failed"];
+const TOOLS_FINAL_MESSAGE_TIMESTAMP: &str = "2026-09-02T03:04:53.666Z";
+
+fn await_status(harness: &Harness, id: &str, needles: &[&str]) -> String {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let stdout = stdout_of(&harness.run(&["status", id]));
+        if needles.iter().all(|needle| stdout.contains(needle)) {
+            return stdout;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "status never showed {needles:?}:\n{stdout}"
+        );
+        sleep(Duration::from_millis(20));
+    }
+}
 
 fn detach(harness: &Harness, prompt: &str) -> String {
     let output = harness.run(&["--detach", "--harness", "claude", "--model", "opus", prompt]);
@@ -222,4 +240,116 @@ fn resume_reports_a_failed_turn_with_exit_zero() {
     assert_eq!(resumed.status.code(), Some(0), "{}", stderr_of(&resumed));
     assert!(stdout.contains("status: failed"), "{stdout}");
     assert!(stdout.contains("exitCode: 7"), "{stdout}");
+}
+
+#[test]
+fn a_running_session_reports_last_activity_and_the_current_tool() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_for(8, 3000);
+
+    let id = detach(&harness, "review");
+    let status = await_status(
+        &harness,
+        &id,
+        &[
+            "currentTool: Read",
+            &format!("lastActivity: \"{TOOLS_FINAL_MESSAGE_TIMESTAMP}\""),
+        ],
+    );
+    assert!(status.contains("state: running"), "{status}");
+    assert!(status.contains("steps: 1"), "{status}");
+
+    let again = stdout_of(&harness.run(&["status", &id]));
+    assert!(again.contains("steps: 1"), "{again}");
+    assert!(again.contains("currentTool: Read"), "{again}");
+
+    let ps = stdout_of(&harness.run(&["ps"]));
+    assert!(ps.contains("sessions[1]{id,state,harness,model}:"), "{ps}");
+    assert!(!ps.contains("currentTool"), "{ps}");
+    assert!(!ps.contains("lastActivity"), "{ps}");
+
+    let timed_out = harness.run(&["wait", "--timeout", "1", &id]);
+    let timed_out_stdout = stdout_of(&timed_out);
+    assert_eq!(
+        timed_out.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&timed_out)
+    );
+    assert!(
+        timed_out_stdout.contains("status: running"),
+        "{timed_out_stdout}"
+    );
+    assert!(
+        timed_out_stdout.contains("currentTool: Read"),
+        "{timed_out_stdout}"
+    );
+
+    let waited = harness.run(&["wait", &id]);
+    let finished = stdout_of(&waited);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(finished.contains("status: ok"), "{finished}");
+    assert!(finished.contains("steps: 4"), "{finished}");
+    assert!(!finished.contains("currentTool"), "{finished}");
+
+    let after = stdout_of(&harness.run(&["status", &id]));
+    assert!(!after.contains("currentTool"), "{after}");
+}
+
+#[test]
+fn show_truncates_the_final_message_and_message_prints_it_whole() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+
+    let launched = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    assert_eq!(launched.status.code(), Some(0), "{}", stderr_of(&launched));
+    let id = session_id_of(&stdout_of(&launched));
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    let full: String = lines
+        .iter()
+        .rev()
+        .find(|step| {
+            step["source"] == "agent" && !step["message"].as_str().expect("message").is_empty()
+        })
+        .expect("a final agent message")["message"]
+        .as_str()
+        .expect("message")
+        .to_string();
+    assert!(full.chars().count() > 200, "{full}");
+    assert!(full.contains('\n'), "{full}");
+
+    let shown = stdout_of(&harness.run(&["show", &id]));
+    let flattened: String = full.split_whitespace().collect::<Vec<_>>().join(" ");
+    let kept: String = flattened.chars().take(200).collect();
+    assert!(shown.contains("message:"), "{shown}");
+    assert!(shown.contains(&format!("text: \"{kept}...\"")), "{shown}");
+    assert!(!shown.contains("REVIEW-VERDICT: clean\""), "{shown}");
+
+    let raw = harness.run(&["show", "--message", &id]);
+    let raw_stdout = stdout_of(&raw);
+    assert_eq!(raw.status.code(), Some(0), "{}", stderr_of(&raw));
+    assert!(!raw_stdout.contains("session:"), "{raw_stdout}");
+    assert_eq!(raw_stdout.trim_end(), full.trim_end(), "{raw_stdout}");
+    assert!(raw_stdout.contains("\n\n"), "{raw_stdout}");
+}
+
+#[test]
+fn show_reports_an_absent_final_message_as_null() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_after(8);
+
+    let child = harness.spawn(&["--harness", "claude", "--model", "opus", "review"]);
+    harness.kill_hung_harness();
+    let output = child.wait_with_output().expect("boxr finishes");
+    let id = session_id_of(&stdout_of(&output));
+
+    let shown = stdout_of(&harness.run(&["show", &id]));
+    assert!(shown.contains("text: null"), "{shown}");
+
+    let raw = harness.run(&["show", "--message", &id]);
+    assert_eq!(raw.status.code(), Some(0), "{}", stderr_of(&raw));
+    assert_eq!(stdout_of(&raw), "");
 }

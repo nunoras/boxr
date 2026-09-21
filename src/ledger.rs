@@ -625,6 +625,21 @@ pub fn totals(normalized: &Path) -> Tally {
     tally
 }
 
+pub fn final_agent_message(normalized: &Path) -> Option<String> {
+    let text = fs::read_to_string(normalized).ok()?;
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value.get("step_id").is_some())
+        .filter(|value| value.get("source").and_then(Value::as_str) == Some("agent"))
+        .filter_map(|value| {
+            value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .rfind(|message| !message.is_empty())
+}
+
 pub fn trajectory(normalized: &Path, summary: &Summary) -> Result<Trajectory> {
     let text = fs::read_to_string(normalized)
         .with_context(|| format!("reading {}", normalized.display()))?;

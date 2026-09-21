@@ -24,6 +24,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Output is axi-style TOON on stdout with `help[]` next-step lines; exit codes are defined in `src/fail.rs`.
   `boxr ps`, `boxr status` and `boxr wait` are a fixed machine contract other tools read, locked by `tests/contract.rs` and by depot's `docs/boxr-contract.md`: `ps` prints `sessions[N]{id,state,harness,model}:`, `status` prints `state:` from `running|finished|stopped|interrupted|failed`, and `wait` prints `status:` from `ok|failed|interrupted|running` and exits zero for every outcome, keeping a non-zero exit only for an unknown session or an unreadable ledger.
   Blocking launch and `boxr resume` exit rules live under "Resuming a finished session" / supervising in `docs/design.md` (resume exits zero once recorded; blocking follows turn status, including failed-with-harness-exit-0).
+  A running session adds `lastActivity` and `currentTool` to `status`, `wait` and `GET /status/<id>` (`src/activity.rs`), and `boxr show --message <id>` prints the full final assistant message that `show` truncates to `MESSAGE_LIMIT`.
 - No comments in code, per the repo's coding standard.
 
 ## Maintaining this file
