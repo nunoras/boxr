@@ -3,7 +3,9 @@ use crate::cost;
 use crate::detached::{self, LaunchFile};
 use crate::fail::Fail;
 use crate::git;
-use crate::harness::{apply_config_dir, Harness, HarnessSession, LaunchRequest, StreamEvent};
+use crate::harness::{
+    apply_config_dir, Harness, HarnessSession, LaunchMode, LaunchRequest, StreamEvent,
+};
 use crate::home::restrict_file;
 use crate::ledger::{self, Follower, Seed, SessionStart, Summary};
 use crate::report::{self, Ledger, Report};
@@ -22,7 +24,7 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 const STDERR_TAIL_BYTES: u64 = 4096;
 
 pub struct Launch {
-    pub session: Session,
+    session: Session,
     program: PathBuf,
     harness_session: HarnessSession,
     mode: String,
@@ -31,26 +33,61 @@ pub struct Launch {
     from_bytes: u64,
 }
 
+impl Launch {
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    pub fn resumed_from(&self) -> Option<&str> {
+        self.resumed_from.as_deref()
+    }
+
+    pub fn record(
+        &self,
+        harness: &dyn Harness,
+        request: &LaunchRequest,
+        profile: Option<String>,
+        started_millis: u64,
+        git_base: Option<String>,
+    ) -> Result<()> {
+        detached::record_launch(
+            &self.session,
+            &LaunchFile {
+                harness: harness.id().to_string(),
+                model: request.model.clone(),
+                effort: request.effort.clone(),
+                prompt: request.prompt.clone(),
+                cwd: request.cwd.clone(),
+                started_millis,
+                mode: self.mode.clone(),
+                profile,
+                resumed_from: self.resumed_from.clone(),
+                harness_session_id: harness_session_id(request),
+                from_bytes: self.from_bytes,
+                kind: request.kind.clone(),
+                kind_source: request.kind_source.clone(),
+                git_base,
+            },
+        )
+    }
+}
+
+fn harness_session_id(request: &LaunchRequest) -> Option<String> {
+    match &request.mode {
+        LaunchMode::Resume { harness_session_id } => Some(harness_session_id.clone()),
+        LaunchMode::Fresh => None,
+    }
+}
+
 pub struct Continuation {
     pub parent: String,
     pub profile: Option<String>,
     pub from_bytes: u64,
+    pub mode: String,
 }
 
 pub fn prepare(harness: &Arc<dyn Harness>, request: &LaunchRequest, home: &Path) -> Result<Launch> {
-    let session = Session::plan(home);
-    let harness_session = harness_session_of(&session);
-    let program = program_of(harness, request, &harness_session)?;
-    session.materialize()?;
-    Ok(Launch {
-        session,
-        program,
-        harness_session,
-        mode: "headless".to_string(),
-        profile: None,
-        resumed_from: None,
-        from_bytes: 0,
-    })
+    assemble(harness, request, Session::plan(home), None)
 }
 
 pub fn harness_session_of(session: &Session) -> HarnessSession {
@@ -65,18 +102,16 @@ pub fn adopt(
     request: &LaunchRequest,
     session: Session,
 ) -> Result<Launch> {
-    let harness_session = harness_session_of(&session);
-    let program = program_of(harness, request, &harness_session)?;
-    session.materialize()?;
-    Ok(Launch {
-        session,
-        program,
-        harness_session,
-        mode: "headless".to_string(),
-        profile: None,
-        resumed_from: None,
-        from_bytes: 0,
-    })
+    assemble(harness, request, session, None)
+}
+
+pub fn adopt_continuation(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    session: Session,
+    continuation: &Continuation,
+) -> Result<Launch> {
+    assemble(harness, request, session, Some(continuation))
 }
 
 pub fn resume(
@@ -85,18 +120,40 @@ pub fn resume(
     continuation: &Continuation,
     home: &Path,
 ) -> Result<Launch> {
-    let session = Session::plan(home);
-    let harness_session = continued_harness_session(request, &session, home, &continuation.parent)?;
+    assemble(harness, request, Session::plan(home), Some(continuation))
+}
+
+fn assemble(
+    harness: &Arc<dyn Harness>,
+    request: &LaunchRequest,
+    session: Session,
+    continuation: Option<&Continuation>,
+) -> Result<Launch> {
+    let harness_session = match continuation {
+        Some(continuation) => {
+            continued_harness_session(request, &session, &session.home, &continuation.parent)?
+        }
+        None => harness_session_of(&session),
+    };
     let program = program_of(harness, request, &harness_session)?;
     session.materialize()?;
+    let (mode, profile, resumed_from, from_bytes) = match continuation {
+        Some(continuation) => (
+            continuation.mode.clone(),
+            continuation.profile.clone(),
+            Some(continuation.parent.clone()),
+            continuation.from_bytes,
+        ),
+        None => ("headless".to_string(), None, None, 0),
+    };
     Ok(Launch {
         session,
         program,
         harness_session,
-        mode: "resume".to_string(),
-        profile: continuation.profile.clone(),
-        resumed_from: Some(continuation.parent.clone()),
-        from_bytes: continuation.from_bytes,
+        mode,
+        profile,
+        resumed_from,
+        from_bytes,
     })
 }
 
@@ -122,14 +179,14 @@ fn continued_harness_session(
     parent_id: &str,
 ) -> Result<HarnessSession> {
     match &request.mode {
-        crate::harness::LaunchMode::Resume { harness_session_id } => {
+        LaunchMode::Resume { harness_session_id } => {
             let origin = origin_session(home, parent_id)?;
             Ok(HarnessSession {
                 session_id: harness_session_id.clone(),
                 dir: origin.harness_dir(),
             })
         }
-        crate::harness::LaunchMode::Fresh => Ok(harness_session_of(session)),
+        LaunchMode::Fresh => Ok(harness_session_of(session)),
     }
 }
 
@@ -189,40 +246,33 @@ pub fn headless(
     account: Account<'_>,
     launch: Launch,
 ) -> Result<Report> {
+    let started = Instant::now();
+    let started_at = now_millis();
+    let git_base = detached::read_launch(launch.session())?
+        .and_then(|launch| launch.git_base)
+        .or_else(|| git::head(&request.cwd));
+    let profile = launch
+        .profile
+        .clone()
+        .or_else(|| account.name.map(str::to_string));
+    launch.record(
+        harness.as_ref(),
+        request,
+        profile.clone(),
+        started_at as u64,
+        git_base.clone(),
+    )?;
     let Launch {
         session,
         program,
         harness_session,
         mode,
-        profile,
         resumed_from,
         from_bytes,
+        ..
     } = launch;
-    let profile = profile.or_else(|| account.name.map(str::to_string));
     let mut command = harness.command(request, &harness_session)?;
     apply_config_dir(&mut command, harness.as_ref(), account.dir);
-    let started = Instant::now();
-    let started_at = now_millis();
-    let git_base = detached::read_launch(&session)?
-        .and_then(|launch| launch.git_base)
-        .or_else(|| git::head(&request.cwd));
-    detached::record_launch(
-        &session,
-        &LaunchFile {
-            harness: harness.id().to_string(),
-            model: request.model.clone(),
-            effort: request.effort.clone(),
-            prompt: request.prompt.clone(),
-            cwd: request.cwd.clone(),
-            started_millis: started_at as u64,
-            mode: mode.clone(),
-            profile: profile.clone(),
-            resumed_from: resumed_from.clone(),
-            kind: request.kind.clone(),
-            kind_source: request.kind_source.clone(),
-            git_base: git_base.clone(),
-        },
-    )?;
     detached::record_supervisor(&session, std::process::id())?;
 
     let mut builder = Command::new(&program);

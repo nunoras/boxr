@@ -35,6 +35,10 @@ pub struct LaunchFile {
     #[serde(default)]
     pub resumed_from: Option<String>,
     #[serde(default)]
+    pub harness_session_id: Option<String>,
+    #[serde(default)]
+    pub from_bytes: u64,
+    #[serde(default)]
     pub kind: Option<String>,
     #[serde(default, rename = "kindSource")]
     pub kind_source: Option<String>,
@@ -76,8 +80,12 @@ pub fn record_supervisor(session: &Session, pid: u32) -> Result<()> {
 pub fn spawn_supervisor(session: &Session) -> Result<Child> {
     let program =
         std::env::current_exe().context("locating the boxr executable to supervise with")?;
-    let log = session.dir.join("supervisor.log");
-    let stderr = fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
+    let log = session.supervisor_log_path();
+    let stderr = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .with_context(|| format!("opening {}", log.display()))?;
     restrict_file(&log)?;
     let mut command = Command::new(program);
     command

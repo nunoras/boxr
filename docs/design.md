@@ -52,6 +52,18 @@ A multi-hop resume walks `resumedFrom` to the origin session so `--session-dir` 
 Its ledger starts at the byte offset the harness transcript had already reached when the continuation launched, so the original steps are recorded once, in the original session, and the original session's files are never rewritten.
 The launch record stores `mode`, `profile` and `resumedFrom` with the rest of the launch, so a supervisor killed before the report and summary are written still reconstructs an interrupted continuation linked to its parent.
 Resuming an unknown session, a session that is still running, a session with no recorded harness session id, or one whose harness transcript is gone is a usage error that names which of those it was.
+`boxr resume --detach <id> "<prompt>"` starts the continuation in the background the way a fresh detached launch does.
+It prints the new child id in the detached result shape, with `resumedFrom` naming the parent.
+The launch record it writes before spawning the supervisor carries the resume mode, the harness session id, the transcript byte offset and the parent, so a supervisor that starts later adopts the persisted continuation instead of launching fresh.
+
+#### Retrying a limited session
+
+`boxr retry <id> [--detach]` re-drives a finished session whose summary recorded `limitHit`.
+It reuses the saved harness, model, effort, profile, cwd, kind and prompt, and runs exactly one continuation through the same path as `boxr resume`.
+When the session recorded a harness session id, the retry resumes that conversation from the transcript byte offset; when it did not, the retry starts a fresh launch linked to the parent through `resumedFrom` rather than fabricating a transcript resume.
+Retrying a session that is still running, one that did not hit a limit, or one without a launch record to read its saved prompt and cwd from is a usage error.
+Retry never loops: it performs one continuation and stops, so a retry that hits the limit again is itself retryable and nothing re-drives it automatically.
+The retry child records `mode: retry` and the parent stays exactly as it was.
 
 #### Supervising a detached session
 
@@ -75,6 +87,8 @@ boxr's own lifecycle maps onto the five states rather than adding to them: a tur
 `stopped` is never printed, because `boxr stop` ends a session from outside and that is already `interrupted`.
 `boxr tail` streams the normalized ledger as it is appended.
 `boxr stop` writes a stop file into the session directory instead of signalling the supervisor, so it works the same way on both platforms, and it reconciles the session itself if the supervisor does not answer within ten seconds.
+A detached supervisor appends a `supervise start <id>` line and a `supervise finish <id> exitCode=<n>` or `supervise error <id> exitCode=<n>` line to `supervisor.log`, so a session whose supervisor never wrote a report still leaves a trace of how it ended.
+The lifecycle lines carry the session id and the exit code and never the prompt or the saved session metadata.
 `boxr serve [--port N]` exposes the same read surface over HTTP as JSON so a fleet view on another machine can poll this host (default port 4035, bind all interfaces).
 The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`; anything that would mutate the ledger is refused with 405.
 The ledger is still written only by the launch and outcome paths on this machine.

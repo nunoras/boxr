@@ -92,6 +92,10 @@ impl Session {
         self.dir.join("supervisor.json")
     }
 
+    pub fn supervisor_log_path(&self) -> PathBuf {
+        self.dir.join("supervisor.log")
+    }
+
     pub fn report_path(&self) -> PathBuf {
         self.dir.join("report.json")
     }

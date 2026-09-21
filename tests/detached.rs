@@ -416,6 +416,62 @@ fn ps_lists_a_session_launched_in_the_foreground() {
 }
 
 #[test]
+fn ps_lists_a_detached_resume_while_its_parent_stays_finished() {
+    let mut harness = Harness::new();
+    harness.slow_harness(500);
+    let parent = detach(&harness, "hello");
+    let waited = harness.run(&["wait", &parent]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout_of(&waited).contains("status: ok"),
+        "{}",
+        stdout_of(&waited)
+    );
+
+    harness.use_fixture("resume");
+    let resumed = harness.run(&["resume", "--detach", &parent, "and now?"]);
+    let stdout = stdout_of(&resumed);
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr_of(&resumed));
+    assert!(stdout.contains("status: running"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {parent}")),
+        "{stdout}"
+    );
+    let child = session_id_of(&stdout);
+    assert_ne!(
+        child, parent,
+        "the detached continuation reused the parent id"
+    );
+
+    let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
+    assert!(
+        rows.iter().any(|row| row.starts_with(&child)),
+        "`boxr ps` did not list the running continuation: {rows:?}"
+    );
+
+    let waited = harness.run(&["wait", &child]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout_of(&waited).contains("status: ok"),
+        "{}",
+        stdout_of(&waited)
+    );
+
+    let parent_status = stdout_of(&harness.run(&["status", &parent]));
+    assert!(
+        parent_status.contains("status: ok"),
+        "the parent changed: {parent_status}"
+    );
+    assert!(
+        parent_status.contains("status: ok"),
+        "the parent changed: {parent_status}"
+    );
+    let parent_summary = summary_of(&harness.boxr_home(), &parent);
+    assert_eq!(parent_summary["mode"], "headless");
+    assert_eq!(parent_summary["resumedFrom"], serde_json::Value::Null);
+}
+
+#[test]
 fn commands_on_an_unknown_session_are_usage_errors() {
     let harness = Harness::new();
     for args in [
@@ -514,7 +570,7 @@ fn the_raw_stream_of_a_detached_session_lands_verbatim_under_the_boxr_home() {
 fn ps_keeps_listing_a_detached_session_until_it_finishes() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");
-    harness.slow_harness(400);
+    harness.slow_harness(1200);
 
     let id = detach(&harness, "review");
     for _ in 0..3 {
