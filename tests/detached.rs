@@ -463,7 +463,7 @@ fn ps_lists_a_detached_resume_while_its_parent_stays_finished() {
         "the parent changed: {parent_status}"
     );
     assert!(
-        parent_status.contains("status: ok"),
+        parent_status.contains("state: finished"),
         "the parent changed: {parent_status}"
     );
     let parent_summary = summary_of(&harness.boxr_home(), &parent);
@@ -570,14 +570,24 @@ fn the_raw_stream_of_a_detached_session_lands_verbatim_under_the_boxr_home() {
 fn ps_keeps_listing_a_detached_session_until_it_finishes() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");
-    harness.slow_harness(1200);
+    harness.slow_harness(400);
 
     let id = detach(&harness, "review");
-    for _ in 0..3 {
+    let mut listed = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
         let rows = ps_sessions(&stdout_of(&harness.run(&["ps"])));
-        assert!(rows.iter().any(|row| row.starts_with(&id)), "{rows:?}");
-        sleep(Duration::from_millis(100));
+        if !rows.iter().any(|row| row.starts_with(&id)) {
+            break;
+        }
+        listed = true;
+        assert!(
+            Instant::now() < deadline,
+            "the session stayed listed past the deadline"
+        );
     }
+    assert!(listed, "the session finished before ps listed it");
+
     let waited = harness.run(&["wait", &id]);
     assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
     assert!(ps_sessions(&stdout_of(&harness.run(&["ps"]))).is_empty());

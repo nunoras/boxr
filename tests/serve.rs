@@ -205,3 +205,26 @@ fn running_status_reports_the_last_activity_and_the_current_tool() {
     assert!(finished.get("currentTool").is_none(), "{finished}");
     assert!(finished.get("lastActivity").is_none(), "{finished}");
 }
+
+#[test]
+fn a_failed_session_keeps_its_stderr_out_of_the_summary_and_the_http_status() {
+    let mut harness = Harness::new();
+    harness.fail_with("7");
+    let id = detach(&harness, "hello");
+    let waited = harness.run(&["wait", &id]);
+    let stdout = stdout_of(&waited);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout.contains("stderrTail: \"fake claude failing on purpose with exit code 7\""),
+        "{stdout}"
+    );
+
+    let summary =
+        std::fs::read_to_string(harness.boxr_home().join("summary.jsonl")).expect("summary ledger");
+    assert!(!summary.contains("failing on purpose"), "{summary}");
+
+    let server = start_server(&harness);
+    let (status, body) = http(server.port, "GET", &format!("/status/{id}"));
+    assert_eq!(status, 200, "{body}");
+    assert!(!body.contains("failing on purpose"), "{body}");
+}
