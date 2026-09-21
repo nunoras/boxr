@@ -14,7 +14,7 @@ fn list_rows(stdout: &str) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
     let mut in_table = false;
     for line in stdout.lines() {
-        if line.starts_with("sessions[") {
+        if line.starts_with("list[") {
             in_table = true;
             continue;
         }
@@ -40,7 +40,7 @@ fn list_prints_the_newest_session_first_and_honours_the_limit() {
 
     let limited = stdout_of(&harness.run(&["list", "--limit", "2"]));
     let rows = list_rows(&limited);
-    assert!(limited.contains("sessions[2]{"), "{limited}");
+    assert!(limited.contains("list[2]{"), "{limited}");
     assert_eq!(rows.len(), 2, "{limited}");
     assert_eq!(rows[0][0], third, "{limited}");
     assert_eq!(rows[1][0], second, "{limited}");
@@ -113,7 +113,10 @@ fn an_unknown_single_word_is_refused_with_the_closest_command() {
     let stderr = stderr_of(&output);
 
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("unknown command `statsu`"), "{stderr}");
+    assert!(
+        stderr.contains("`statsu` is not a boxr command"),
+        "{stderr}"
+    );
     assert!(stderr.contains("Did you mean `stats`?"), "{stderr}");
     assert!(!harness.boxr_home().join("sessions").exists());
 
@@ -121,6 +124,22 @@ fn an_unknown_single_word_is_refused_with_the_closest_command() {
     let stderr = stderr_of(&typo);
     assert_eq!(typo.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("Did you mean `list`?"), "{stderr}");
+}
+
+#[test]
+fn a_word_that_is_far_from_every_command_gets_no_did_you_mean() {
+    let harness = Harness::new();
+    let output = harness.run(&["hello"]);
+    let stderr = stderr_of(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("`hello` is not a boxr command"), "{stderr}");
+    assert!(!stderr.contains("Did you mean"), "{stderr}");
+    assert!(
+        stderr.contains("pass `--harness <h> --model <m>`, or quote a longer prompt"),
+        "{stderr}"
+    );
+    assert!(!harness.boxr_home().join("sessions").exists());
 }
 
 #[test]
@@ -154,6 +173,6 @@ fn a_single_bare_word_is_refused_even_with_configured_defaults() {
     let output = harness.run(&["hello"]);
     let stderr = stderr_of(&output);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("unknown command `hello`"), "{stderr}");
+    assert!(stderr.contains("`hello` is not a boxr command"), "{stderr}");
     assert!(!harness.boxr_home().join("sessions").exists());
 }

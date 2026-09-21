@@ -43,13 +43,6 @@ fn main() -> ExitCode {
             return ExitCode::from(97);
         }
     };
-    let args: Vec<String> = env::args().skip(1).collect();
-    if let Some(path) = env::var_os(ARGS_ENV) {
-        if let Err(error) = fs::write(PathBuf::from(path), args.join("\n")) {
-            eprintln!("cannot record arguments: {error}");
-            return ExitCode::from(97);
-        }
-    }
 
     let mut prompt = String::new();
     if let Err(error) = std::io::stdin().read_to_string(&mut prompt) {

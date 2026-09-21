@@ -21,7 +21,7 @@ boxr --harness claude --model opus --effort high --account work --kind build "fi
 
 Harness, model, effort and account are explicit on the command line, with fallbacks to `config.json` in the boxr home. Today boxr launches Claude Code and pi. pi models use the `provider/id` form (for example `--model xai/grok-4.5`), and `--effort` maps to pi's thinking level.
 
-`boxr models --harness pi` prints the model ids the installed pi catalog advertises, read from `pi --list-models` rather than a list boxr ships. A harness that cannot list its models is a usage error. For pi, a fresh launch checks `--model` against that catalog before it allocates a session, so an unknown id exits 2, names the closest full id and starts nothing.
+`boxr models --harness pi` prints the model ids the installed pi catalog advertises, read from `pi --list-models` rather than a list boxr ships. A harness that cannot list its models is a usage error. For pi, a fresh launch checks `--model` against that catalog before it allocates a session, so an unknown id exits 2, names the closest full id and starts nothing; a catalog that fails to run is a one-line warning and the launch goes ahead, and `--no-preflight` skips the check.
 
 `boxr list` reads the folded summary ledger newest first, twenty rows by default, and adds any session that is still running. `--all` shows every session unless `--limit N` is also given.
 

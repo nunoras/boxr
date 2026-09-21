@@ -20,6 +20,9 @@ For pi, a fresh launch checks `--model` against that catalog before it allocates
 boxr --harness pi --model xai/grok-9.9 "say ok"
 ```
 
+A catalog command that fails or prints nothing parseable is a one-line warning on stderr and the launch goes ahead without the check.
+`--no-preflight` skips the check on a single launch.
+
 ## Drive it
 
 ```
@@ -40,10 +43,11 @@ It launches no model, so it spends no quota.
 
 `models.txt` holds TOON with a `models[N]{provider,model}:` table whose rows are `provider,model` pairs from `pi --list-models`.
 `unsupported.txt` holds the usage error for claude and names the missing catalog.
-`list.txt` holds a `sessions[0]{id,state,harness,model,status,start,durationMs,kind,verdict}:` table, empty because the throwaway home has no sessions.
+`list.txt` holds a `list[0]{id,state,harness,model,status,start,durationMs,kind,verdict}:` table, empty because the throwaway home has no sessions.
 
 ## Gotchas
 
 - `pi --list-models` reads the installed catalog and the ambient pi config, so the count depends on what pi is logged into and which catalogs it has updated.
 - `boxr list` is read-only: it folds `summary.jsonl` and adds running launch records, so it never reconciles a dead supervisor the way `boxr ps` does.
+- The list table is named `list`, not `sessions`: `sessions` is the `boxr ps` contract.
 - The default view is 20 rows. `--all` lifts that unless `--limit` is also given.

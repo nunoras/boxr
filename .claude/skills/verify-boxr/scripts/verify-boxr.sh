@@ -266,7 +266,7 @@ if [ "$feature" = models-and-list ]; then
   step="list"
   "$boxr_bin" list >"$run_dir/list.txt" 2>>"$run_dir/stderr.txt" \
     || die "boxr list failed; read $run_dir/list.txt"
-  grep -q '^sessions\[0\]{id,state,harness,model,status,start,durationMs,kind,verdict}:' "$run_dir/list.txt" \
+  grep -q '^list\[0\]{id,state,harness,model,status,start,durationMs,kind,verdict}:' "$run_dir/list.txt" \
     || die "boxr list has the wrong shape; read $run_dir/list.txt"
 
   step="cleanup"
