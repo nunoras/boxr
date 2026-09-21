@@ -199,6 +199,7 @@ fn tool_results(message: &Value) -> Option<TranscriptEntry> {
     Some(TranscriptEntry::ToolResults(vec![ObservationResult {
         source_call_id,
         content: result_content(message.get("content")),
+        is_error: message.get("isError").and_then(Value::as_bool),
     }]))
 }
 
