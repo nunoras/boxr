@@ -932,13 +932,20 @@ fn show(id: &str) -> Result<i32> {
             &session.normalized_path().display().to_string(),
         )
         .field("raw", &session.raw_dir().display().to_string());
-    toon.list(
-        "help",
-        &[
-            format!("Run `boxr export --atif {id}` to write a standard ATIF trajectory"),
-            format!("Run `boxr resume {id} \"<prompt>\"` to continue the session"),
-        ],
-    );
+    let mut help = Vec::new();
+    if summary.status != "ok" {
+        help.push(format!(
+            "Read {} for the harness error output",
+            session.stderr_path().display()
+        ));
+    }
+    help.push(format!(
+        "Run `boxr export --atif {id}` to write a standard ATIF trajectory"
+    ));
+    help.push(format!(
+        "Run `boxr resume {id} \"<prompt>\"` to continue the session"
+    ));
+    toon.list("help", &help);
     print!("{}", toon.render());
     Ok(EXIT_OK)
 }

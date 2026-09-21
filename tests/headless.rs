@@ -399,9 +399,7 @@ fn an_unknown_kind_lists_the_valid_kinds() {
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("unknown kind `unknown`"), "{stderr}");
     assert!(
-        stderr.contains(
-            "Valid kinds: build, chore, describe, docs, fix, plan, research, review"
-        ),
+        stderr.contains("Valid kinds: build, chore, describe, docs, fix, plan, research, review"),
         "{stderr}"
     );
 }

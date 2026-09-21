@@ -50,6 +50,7 @@ pub enum StreamEvent {
         error: Option<String>,
         limit_hit: bool,
     },
+    Recovered,
     Ignored,
 }
 

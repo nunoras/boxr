@@ -120,6 +120,27 @@ fn wait_reports_a_failed_turn_with_exit_zero() {
     assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
     assert!(stdout.contains("status: failed"), "{stdout}");
     assert_eq!(state_of(&stdout), "failed", "{stdout}");
+    assert!(stdout.contains("exitCode: 7"), "{stdout}");
+    assert!(
+        stdout.contains("error: \"fake claude failing on purpose with exit code 7\""),
+        "{stdout}"
+    );
+
+    let status = stdout_of(&harness.run(&["status", &id]));
+    assert_eq!(state_of(&status), "failed", "{status}");
+    assert!(status.contains("exitCode: 7"), "{status}");
+    assert!(
+        status.contains("error: \"fake claude failing on purpose with exit code 7\""),
+        "{status}"
+    );
+
+    let summary = summary_of(&harness.boxr_home(), &id);
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["exitCode"], 7);
+    assert_eq!(
+        summary["error"],
+        "fake claude failing on purpose with exit code 7"
+    );
 }
 
 #[test]
