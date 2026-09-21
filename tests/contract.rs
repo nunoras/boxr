@@ -88,6 +88,17 @@ fn help_names_every_command_and_flag_depot_requires() {
 }
 
 #[test]
+fn help_mentions_list_and_models() {
+    let harness = Harness::new();
+    let output = harness.run(&["--help"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(mentions(&stdout, "list"), "{stdout}");
+    assert!(mentions(&stdout, "models"), "{stdout}");
+}
+
+#[test]
 fn status_and_ps_report_the_states_depot_reads() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");

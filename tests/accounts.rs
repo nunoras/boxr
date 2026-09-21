@@ -494,7 +494,7 @@ fn the_configured_default_account_is_used_when_the_flag_is_omitted() {
     let sandbox = Sandbox::new();
     add_profile(&sandbox, "work");
     sandbox.write_config(r#"{"defaults":{"harness":"claude","model":"sonnet","account":"work"}}"#);
-    let output = sandbox.run(&["hello"]);
+    let output = sandbox.run(&["hello there"]);
     let stdout = stdout_of(&output);
 
     assert_eq!(

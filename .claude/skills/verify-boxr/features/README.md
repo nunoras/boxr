@@ -21,6 +21,7 @@ Add the file in the same ticket that adds the feature, and wire its driver into 
 | ledger reads | `boxr show`, `boxr export --atif`, `boxr stats`, `--kind` | `detached`, `outcomes`, `session-cost` | [ledger-reads.md](ledger-reads.md) |
 | outcomes | `boxr outcome <id> success --note "<text>"`, `--check-reverted` | `outcomes` | [outcomes.md](outcomes.md) |
 | session cost | `currency` and `prices` in `config.json` | `session-cost` | [session-cost.md](session-cost.md) |
+| models and list | `boxr models --harness pi`, `boxr list [--all] [--limit N]` | `models-and-list` | [models-and-list.md](models-and-list.md) |
 
 ## Proof status
 
