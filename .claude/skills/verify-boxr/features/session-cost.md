@@ -41,7 +41,7 @@ over the token counts that same line records, and `currency: "USD"`.
 
 `boxr show <id>` prints the cost and currency the launch printed, and `boxr stats --by model --since 1d` prints one row `haiku,USD,1,...` whose `apiEquivalentCost` cell equals the launch output and whose `unpricedSessions` cell is `0`.
 
-The evidence directory keeps `toon.txt`, `show.txt`, `stats.txt`, `summary.jsonl`, `meta.txt` and `raw/`.
+The evidence directory keeps `launch.txt`, `show.txt`, `stats.txt`, `summary.jsonl`, `meta.txt` and `sessions/<id>/`.
 `meta.txt` also records the price table the run used as `configJson`.
 
 ## Gotchas
