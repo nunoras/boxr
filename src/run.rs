@@ -433,9 +433,9 @@ pub fn headless(
     let exit_code = exit_code_of(&status);
     let duration_ms = started.elapsed().as_millis() as u64;
     let interrupted = stop.was_requested() || stopped_externally(&status);
-    let harness_error = match harness_error {
-        Some(error) => Some(error),
-        None if !interrupted && !status.success() => stderr_tail(&stderr_path),
+    let stderr_tail = match &harness_error {
+        Some(_) => None,
+        None if !interrupted && !status.success() => read_stderr_tail(&stderr_path),
         None => None,
     };
     let git_evidence = git::collect(&request.cwd, git_base.as_deref());
@@ -512,6 +512,7 @@ pub fn headless(
         capture_error: tally.error,
         summary_error: summary_error.clone(),
         error: harness_error,
+        stderr_tail,
         limit_hit: hit_limit,
         interrupted,
         ledger,
@@ -529,13 +530,17 @@ pub fn headless(
     })
 }
 
-fn stderr_tail(path: &Path) -> Option<String> {
+fn read_stderr_tail(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
-    file.seek(SeekFrom::Start(length.saturating_sub(STDERR_TAIL_BYTES)))
-        .ok()?;
+    let start = length.saturating_sub(STDERR_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
+    if start > 0 {
+        let newline = bytes.iter().position(|byte| *byte == b'\n')?;
+        bytes.drain(..=newline);
+    }
     let text = String::from_utf8_lossy(&bytes).trim().to_string();
     (!text.is_empty()).then_some(text)
 }
