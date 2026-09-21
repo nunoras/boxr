@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 
 const FIXTURE_SESSION_ID: &str = "11111111-2222-4333-8444-555555555555";
 
-fn toon_path(path: &std::path::Path) -> String {
+fn toon_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "\\\\")
 }
 
