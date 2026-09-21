@@ -1173,7 +1173,7 @@ fn declared_kind(kind: Option<&str>, config: &Config) -> Result<Option<String>> 
         return Ok(None);
     };
     let core = [
-        "build", "fix", "research", "plan", "review", "chore", "docs",
+        "build", "fix", "research", "plan", "review", "chore", "docs", "describe",
     ];
     if core.contains(&kind) || config.kinds.contains_key(kind) {
         return Ok(Some(kind.to_string()));
