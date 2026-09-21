@@ -182,6 +182,11 @@ fn help_mentions_retry_and_the_detached_resume() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(mentions(&stdout, "retry"), "{stdout}");
+
+    let resume = harness.run(&["resume", "--help"]);
+    let resume_help = stdout_of(&resume);
+    assert_eq!(resume.status.code(), Some(0), "{}", stderr_of(&resume));
+    assert!(mentions(&resume_help, "--detach"), "{resume_help}");
 }
 
 #[test]
