@@ -168,6 +168,45 @@ fn ps_status_and_outcome_are_json_and_mutations_are_refused() {
 }
 
 #[test]
+fn running_status_reports_the_last_activity_and_the_current_tool() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_for(8, 3000);
+
+    let id = detach(&harness, "review");
+    let server = start_server(&harness);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let running = loop {
+        let (status, body) = http(server.port, "GET", &format!("/status/{id}"));
+        assert_eq!(status, 200, "{body}");
+        let value = json_body(&body);
+        let activity = value["lastActivity"].as_str().unwrap_or_default();
+        if value["currentTool"] == "Read" && activity >= "2026-09-02T03:04:53.666Z" {
+            break value;
+        }
+        assert!(Instant::now() < deadline, "{value}");
+        sleep(Duration::from_millis(20));
+    };
+    assert_eq!(running["state"], "running", "{running}");
+
+    let (status, body) = http(server.port, "GET", "/ps");
+    assert_eq!(status, 200, "{body}");
+    let ps = json_body(&body);
+    assert!(ps["sessions"][0].get("currentTool").is_none(), "{ps}");
+    assert!(ps["sessions"][0].get("lastActivity").is_none(), "{ps}");
+
+    let waited = harness.run(&["wait", &id]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+
+    let (_, body) = http(server.port, "GET", &format!("/status/{id}"));
+    let finished = json_body(&body);
+    assert_eq!(finished["state"], "finished", "{finished}");
+    assert!(finished.get("currentTool").is_none(), "{finished}");
+    assert!(finished.get("lastActivity").is_none(), "{finished}");
+}
+
+#[test]
 fn a_failed_session_keeps_its_stderr_out_of_the_summary_and_the_http_status() {
     let mut harness = Harness::new();
     harness.fail_with("7");

@@ -18,6 +18,8 @@ pub struct Harness {
     withhold_transcript: bool,
     delay_ms: String,
     hang_after: Option<String>,
+    hang_ms: Option<String>,
+    grow_ms: Option<String>,
     fixture: &'static str,
     commit: Option<String>,
 }
@@ -40,6 +42,8 @@ impl Harness {
             withhold_transcript: false,
             delay_ms: "5".to_string(),
             hang_after: None,
+            hang_ms: None,
+            grow_ms: None,
             fixture: "hello",
             commit: None,
         }
@@ -99,6 +103,15 @@ impl Harness {
 
     pub fn hang_after(&mut self, lines: usize) {
         self.hang_after = Some(lines.to_string());
+    }
+
+    pub fn hang_for(&mut self, lines: usize, millis: u64) {
+        self.hang_after = Some(lines.to_string());
+        self.hang_ms = Some(millis.to_string());
+    }
+
+    pub fn grow_while_hung(&mut self, millis: u64) {
+        self.grow_ms = Some(millis.to_string());
     }
 
     pub fn pid_file(&self) -> PathBuf {
@@ -252,6 +265,12 @@ impl Harness {
             command
                 .env("BOXR_FAKE_CLAUDE_HANG_AFTER", lines)
                 .env("BOXR_FAKE_CLAUDE_PID", self.pid_file());
+        }
+        if let Some(millis) = &self.hang_ms {
+            command.env("BOXR_FAKE_CLAUDE_HANG_MS", millis);
+        }
+        if let Some(millis) = &self.grow_ms {
+            command.env("BOXR_FAKE_CLAUDE_GROW_MS", millis);
         }
         if let Some(message) = &self.commit {
             command

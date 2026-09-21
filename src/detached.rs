@@ -55,11 +55,19 @@ pub struct Running {
     pub pid: Option<u32>,
     pub launch: LaunchFile,
     pub steps: u64,
+    pub last_activity_millis: u128,
+    pub current_tool: Option<String>,
 }
 
 pub enum State {
     Running(Box<Running>),
     Finished(Box<Report>),
+}
+
+#[derive(Clone, Copy)]
+enum Detail {
+    Full,
+    Listing,
 }
 
 pub fn record_launch(session: &Session, launch: &LaunchFile) -> Result<()> {
@@ -121,18 +129,27 @@ pub fn abandon_detach(session: &Session, supervisor: Option<Child>) {
 }
 
 pub fn state(home: &Path, id: &str) -> Result<State> {
+    state_with(home, id, Detail::Full)
+}
+
+pub fn listing(home: &Path, id: &str) -> Result<State> {
+    state_with(home, id, Detail::Listing)
+}
+
+fn state_with(home: &Path, id: &str, detail: Detail) -> Result<State> {
     let session = Session::open(home, id);
     let launch = read_record::<LaunchFile>(&session.launch_path())?;
     let supervisor = read_record::<SupervisorFile>(&session.supervisor_path())?;
     if let Some(supervisor) = &supervisor {
         if alive(supervisor.pid) {
             let launch = launch.ok_or_else(|| anyhow!("session {id} has no launch record"))?;
-            let steps = ledger::totals(&session.normalized_path()).steps;
-            return Ok(State::Running(Box::new(Running {
-                pid: Some(supervisor.pid),
+            return Ok(State::Running(Box::new(observe(
+                home,
+                &session,
+                Some(supervisor.pid),
                 launch,
-                steps,
-            })));
+                detail,
+            ))));
         }
     }
     if let Some(summary) = ledger::find_summary(home, id)? {
@@ -148,14 +165,33 @@ pub fn state(home: &Path, id: &str) -> Result<State> {
         return Ok(State::Finished(Box::new(report)));
     }
     if let Some(launch) = launch {
-        let steps = ledger::totals(&session.normalized_path()).steps;
-        return Ok(State::Running(Box::new(Running {
-            pid: None,
-            launch,
-            steps,
-        })));
+        return Ok(State::Running(Box::new(observe(
+            home, &session, None, launch, detail,
+        ))));
     }
     Err(no_session(id))
+}
+
+fn observe(
+    home: &Path,
+    session: &Session,
+    pid: Option<u32>,
+    launch: LaunchFile,
+    detail: Detail,
+) -> Running {
+    let snapshot = ledger::snapshot(&session.normalized_path());
+    let steps = ledger::totals_of(&snapshot).steps;
+    let activity = match detail {
+        Detail::Full => crate::activity::inspect(home, session, &launch, &snapshot),
+        Detail::Listing => crate::activity::inspect_ledger(session, &launch, &snapshot),
+    };
+    Running {
+        pid,
+        launch,
+        steps,
+        last_activity_millis: activity.last_activity_millis,
+        current_tool: activity.current_tool,
+    }
 }
 
 fn no_session(id: &str) -> anyhow::Error {

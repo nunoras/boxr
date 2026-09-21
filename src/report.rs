@@ -5,6 +5,7 @@ use crate::output::{one_line, Toon, MESSAGE_LIMIT};
 use crate::session::Session;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +95,19 @@ pub fn exit_code(report: &Report) -> i32 {
 pub fn write(path: &Path, report: &Report) -> Result<()> {
     let text = serde_json::to_string(report).context("encoding the session result")?;
     write_file_atomically(path, &format!("{text}\n"))
+}
+
+pub fn read(path: &Path) -> Result<Option<Report>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::Error::from(error).context(format!("reading {}", path.display())))
+        }
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .with_context(|| format!("parsing {}", path.display()))
 }
 
 pub fn state_of(status: &str) -> &'static str {

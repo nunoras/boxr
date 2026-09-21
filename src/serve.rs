@@ -1,3 +1,4 @@
+use crate::clock;
 use crate::detached::{self, State};
 use crate::home;
 use crate::ledger;
@@ -152,7 +153,7 @@ fn ps_json(home: &Path) -> std::result::Result<Value, (u16, String)> {
     let mut sessions = Vec::new();
     let ids = Session::ids(home).map_err(|error| (500, format!("{error:#}")))?;
     for id in ids {
-        let Ok(state) = detached::state(home, &id) else {
+        let Ok(state) = detached::listing(home, &id) else {
             continue;
         };
         if let State::Running(running) = state {
@@ -181,6 +182,8 @@ fn status_json(home: &Path, id: &str) -> std::result::Result<Value, (u16, String
             "model": running.launch.model,
             "effort": running.launch.effort,
             "startedMillis": running.launch.started_millis,
+            "lastActivity": clock::iso8601(running.last_activity_millis),
+            "currentTool": running.current_tool,
             "steps": running.steps,
             "pid": running.pid,
         })),

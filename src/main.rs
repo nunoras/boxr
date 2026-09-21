@@ -1,4 +1,5 @@
 mod account;
+mod activity;
 mod atif;
 mod clock;
 mod config;
@@ -27,7 +28,7 @@ use detached::State;
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
 use ledger::{Summary, SummaryUpdate};
-use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
+use output::{one_line, without_terminal_controls, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -106,6 +107,9 @@ enum SkillAction {
 #[derive(Subcommand, Debug)]
 enum Command {
     Show {
+        #[arg(long)]
+        message: bool,
+
         #[arg(value_name = "ID")]
         id: String,
     },
@@ -290,7 +294,7 @@ fn dispatch() -> Result<i32> {
     let home = home::ensure_home()?;
     let config = Config::load(&home)?;
     match cli.command {
-        Some(Command::Show { id }) => show(&id),
+        Some(Command::Show { message, id }) => show(&id, message),
         Some(Command::Export { atif, id }) => export(atif, &id),
         Some(Command::Account { action }) => accounts(action, &home, &config),
         Some(Command::Ps) => ps(),
@@ -682,7 +686,7 @@ fn ps() -> Result<i32> {
     let mut ids = Vec::new();
     let mut rows = Vec::new();
     for id in Session::ids(&home)? {
-        let Ok(state) = detached::state(&home, &id) else {
+        let Ok(state) = detached::listing(&home, &id) else {
             continue;
         };
         if let State::Running(running) = state {
@@ -748,7 +752,12 @@ fn render_running(session: &Session, running: &detached::Running) -> String {
             "started",
             &clock::iso8601(running.launch.started_millis as u128),
         )
-        .number("steps", running.steps);
+        .field(
+            "lastActivity",
+            &clock::iso8601(running.last_activity_millis),
+        )
+        .number("steps", running.steps)
+        .optional("currentTool", running.current_tool.as_deref());
     if let Some(pid) = running.pid {
         toon.number("pid", pid);
     }
@@ -1073,7 +1082,7 @@ fn resume_cwd(home: &Path, id: &str) -> Result<PathBuf> {
     std::env::current_dir().context("reading the current directory")
 }
 
-fn show(id: &str) -> Result<i32> {
+fn show(id: &str, message: bool) -> Result<i32> {
     let home = home::boxr_home()?;
     let summary = ledger::read_summary(&home, id).map_err(|error| {
         Fail::usage(
@@ -1082,9 +1091,25 @@ fn show(id: &str) -> Result<i32> {
         )
     })?;
     let session = Session::open(&home, id);
+    let final_message = resolve_final_message(&session);
+    if message {
+        if let Some(text) = &final_message {
+            let text = without_terminal_controls(text);
+            print!("{text}");
+            if !text.ends_with('\n') {
+                println!();
+            }
+        }
+        return Ok(EXIT_OK);
+    }
+    let truncated = final_message
+        .as_deref()
+        .map(|text| one_line(text, MESSAGE_LIMIT));
     let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     let mut toon = Toon::new();
     summarize(&mut toon, &summary, stderr_tail.as_deref());
+    toon.section("message")
+        .optional("text", truncated.as_deref());
     toon.section("files")
         .field(
             "normalized",
@@ -1107,6 +1132,17 @@ fn show(id: &str) -> Result<i32> {
     toon.list("help", &help);
     print!("{}", toon.render());
     Ok(EXIT_OK)
+}
+
+fn resolve_final_message(session: &Session) -> Option<String> {
+    ledger::final_agent_message(&session.normalized_path())
+        .or_else(|| {
+            report::read(&session.report_path())
+                .ok()
+                .flatten()
+                .and_then(|report| report.final_message)
+        })
+        .filter(|text| !text.trim().is_empty())
 }
 
 fn summarize(toon: &mut Toon, summary: &Summary, stderr_tail: Option<&str>) {

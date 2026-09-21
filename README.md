@@ -41,6 +41,8 @@ boxr resume <id> "now add the tests"
 
 `boxr resume` continues a finished session with a new prompt, using the same harness, model, effort and profile.
 
+While a session runs, `boxr status` and `boxr wait` report its `lastActivity` and `currentTool`, so a long tool call does not look like a hang. `boxr ps` keeps the four columns it always had.
+
 ## boxr launches over SSH
 
 `boxr --remote <host>` probes the remote boxr version, runs a detached launch there, prints the remote session id and exits. The session is recorded in the remote ledger only.
@@ -105,8 +107,11 @@ boxr "describe this codebase in one paragraph"
 
 ```
 boxr show <id>
+boxr show --message <id>
 boxr stats --by model --since 1d
 ```
+
+`boxr show` prints the final assistant message truncated to 200 characters. `boxr show --message` prints it whole.
 
 ## Examples
 

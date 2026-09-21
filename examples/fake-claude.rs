@@ -13,6 +13,8 @@ const PROMPT_ENV: &str = "BOXR_FAKE_CLAUDE_PROMPT";
 const DELAY_ENV: &str = "BOXR_FAKE_CLAUDE_DELAY_MS";
 const NO_TRANSCRIPT_ENV: &str = "BOXR_FAKE_CLAUDE_NO_TRANSCRIPT";
 const HANG_AFTER_ENV: &str = "BOXR_FAKE_CLAUDE_HANG_AFTER";
+const HANG_MS_ENV: &str = "BOXR_FAKE_CLAUDE_HANG_MS";
+const GROW_MS_ENV: &str = "BOXR_FAKE_CLAUDE_GROW_MS";
 const PID_ENV: &str = "BOXR_FAKE_CLAUDE_PID";
 const CONFIG_OUT_ENV: &str = "BOXR_FAKE_CLAUDE_CONFIG_OUT";
 const COMMIT_ENV: &str = "BOXR_FAKE_CLAUDE_COMMIT";
@@ -123,9 +125,17 @@ fn main() -> ExitCode {
             if let Some(path) = env::var_os(PID_ENV) {
                 let _ = fs::write(PathBuf::from(path), std::process::id().to_string());
             }
-            sleep(Duration::from_secs(60));
-            eprintln!("fake claude hung and was never killed");
-            return ExitCode::from(97);
+            match env::var(HANG_MS_ENV)
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                Some(millis) => grow_while_hung(&mut transcript_file, millis),
+                None => {
+                    sleep(Duration::from_secs(60));
+                    eprintln!("fake claude hung and was never killed");
+                    return ExitCode::from(97);
+                }
+            }
         }
         if let Some(entry) = transcript_lines.next() {
             append(&mut transcript_file, entry);
@@ -215,6 +225,24 @@ fn exit_code() -> ExitCode {
         eprintln!("fake claude failing on purpose with exit code {code}");
     }
     ExitCode::from(code)
+}
+
+fn grow_while_hung(transcript_file: &mut Option<fs::File>, millis: u64) {
+    let grow = env::var(GROW_MS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|grow| *grow > 0);
+    let Some(grow) = grow else {
+        sleep(Duration::from_millis(millis));
+        return;
+    };
+    let mut waited = 0;
+    while waited < millis {
+        let step = grow.min(millis - waited);
+        sleep(Duration::from_millis(step));
+        waited += step;
+        append(transcript_file, "{\"type\":\"heartbeat\"}");
+    }
 }
 
 fn append(transcript_file: &mut Option<fs::File>, entry: &str) {
