@@ -356,6 +356,12 @@ pub fn field_of(stdout: &str, name: &str) -> String {
         .to_string()
 }
 
+pub fn path_field_of(stdout: &str, name: &str) -> PathBuf {
+    let printed = field_of(stdout, name);
+    let path = serde_json::from_str::<String>(&printed).unwrap_or(printed);
+    PathBuf::from(path)
+}
+
 pub fn normalized_lines(path: &Path) -> Vec<Value> {
     fs::read_to_string(path)
         .expect("normalized ledger")

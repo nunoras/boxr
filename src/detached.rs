@@ -249,6 +249,20 @@ fn detach(command: &mut Command) {
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    keep_caller_pipes_out_of_children();
+}
+
+#[cfg(windows)]
+fn keep_caller_pipes_out_of_children() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        unsafe {
+            SetHandleInformation(GetStdHandle(stream), HANDLE_FLAG_INHERIT, 0);
+        }
+    }
 }
 
 fn finished(session: &Session, summary: &Summary) -> Result<Report> {
