@@ -227,7 +227,11 @@ enum Command {
         #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_PORT)]
         port: u16,
 
-        #[arg(long, value_name = "TOKEN")]
+        #[arg(
+            long,
+            value_name = "TOKEN",
+            help = "Require this bearer token on every request; prefer the BOXR_SERVE_TOKEN environment variable, which keeps the secret out of the process arguments"
+        )]
         token: Option<String>,
     },
     #[command(name = "__supervise", hide = true)]
@@ -1124,7 +1128,7 @@ fn render_stopped(session: &Session, summary: &Summary, action: &str) -> String 
     toon.section("stop")
         .field("id", &session.id)
         .field("action", action);
-    summarize(&mut toon, summary);
+    summarize(&mut toon, summary, None);
     toon.list(
         "help",
         &[
@@ -1354,6 +1358,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     })?;
     let session = Session::open(&home, id);
     let final_message = resolve_final_message(&session);
+    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     if message {
         if let Some(text) = &final_message {
             print!("{text}");
@@ -1367,7 +1372,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
         .as_deref()
         .map(|text| one_line(text, MESSAGE_LIMIT));
     let mut toon = Toon::new();
-    summarize(&mut toon, &summary);
+    summarize(&mut toon, &summary, stderr_tail.as_deref());
     toon.section("message")
         .optional("text", truncated.as_deref());
     toon.section("files")
@@ -1405,7 +1410,7 @@ fn resolve_final_message(session: &Session) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
-fn summarize(toon: &mut Toon, summary: &Summary) {
+fn summarize(toon: &mut Toon, summary: &Summary, stderr_tail: Option<&str>) {
     toon.section("session")
         .field("id", &summary.id)
         .field("status", &summary.status)
@@ -1442,6 +1447,9 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     }
     if let Some(error) = &summary.error {
         toon.field("error", &one_line(error, MESSAGE_LIMIT));
+    }
+    if let Some(tail) = stderr_tail {
+        toon.field("stderrTail", &one_line(tail, MESSAGE_LIMIT));
     }
     if let Some(evidence) = &summary.git {
         toon.section("git")

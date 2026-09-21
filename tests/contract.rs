@@ -151,7 +151,7 @@ fn wait_reports_a_failed_turn_with_exit_zero() {
     assert_eq!(state_of(&stdout), "failed", "{stdout}");
     assert!(stdout.contains("exitCode: 7"), "{stdout}");
     assert!(
-        stdout.contains("error: \"fake claude failing on purpose with exit code 7\""),
+        stdout.contains("stderrTail: \"fake claude failing on purpose with exit code 7\""),
         "{stdout}"
     );
 
@@ -159,16 +159,17 @@ fn wait_reports_a_failed_turn_with_exit_zero() {
     assert_eq!(state_of(&status), "failed", "{status}");
     assert!(status.contains("exitCode: 7"), "{status}");
     assert!(
-        status.contains("error: \"fake claude failing on purpose with exit code 7\""),
+        status.contains("stderrTail: \"fake claude failing on purpose with exit code 7\""),
         "{status}"
     );
 
     let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["status"], "failed");
     assert_eq!(summary["exitCode"], 7);
-    assert_eq!(
-        summary["error"],
-        "fake claude failing on purpose with exit code 7"
+    assert!(summary["error"].is_null(), "{summary}");
+    assert!(
+        !summary.to_string().contains("failing on purpose"),
+        "{summary}"
     );
 }
 
@@ -211,6 +212,11 @@ fn help_mentions_retry_and_the_detached_resume() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(mentions(&stdout, "retry"), "{stdout}");
+
+    let resume = harness.run(&["resume", "--help"]);
+    let resume_help = stdout_of(&resume);
+    assert_eq!(resume.status.code(), Some(0), "{}", stderr_of(&resume));
+    assert!(mentions(&resume_help, "--detach"), "{resume_help}");
 }
 
 #[test]

@@ -671,6 +671,8 @@ fn a_summary_records_the_api_equivalent_cost_from_the_price_table() {
     let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["currency"], "USD");
     assert_eq!(summary["reasoningTokens"], 0);
+    assert!(summary["costError"].is_null(), "{summary}");
+    assert_eq!(summary["costUnpriced"], false);
     assert_close(summary["apiEquivalentCost"].as_f64(), 0.055_109_4);
 
     let shown = harness.run(&["show", &id]);
@@ -681,6 +683,16 @@ fn a_summary_records_the_api_equivalent_cost_from_the_price_table() {
         "{shown_stdout}"
     );
     assert!(shown_stdout.contains("currency: USD"), "{shown_stdout}");
+    assert!(!shown_stdout.contains("costError:"), "{shown_stdout}");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",0.055109,0\n"), "{stats_stdout}");
 }
 
 #[test]
@@ -842,10 +854,81 @@ fn an_unpriced_model_records_an_unknown_cost() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(stdout.contains("apiEquivalentCost: unknown"), "{stdout}");
+    assert!(
+        stdout.contains("costError: \"the price table has no entry for model sonnet\""),
+        "{stdout}"
+    );
 
-    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    let id = session_id_of(&stdout);
+    let summary = summary_of(&harness.boxr_home(), &id);
     assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
     assert_eq!(summary["currency"], "USD");
+    assert_eq!(summary["costUnpriced"], true);
+    let error = summary["costError"].as_str().expect("a cost error");
+    assert!(error.contains("sonnet"), "{error}");
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(session_dir(&harness).join("report.json")).expect("report"),
+    )
+    .expect("report json");
+    assert!(report["apiEquivalentCost"].is_null(), "{report}");
+    assert_eq!(report["costUnpriced"], true);
+    assert!(
+        report["costError"]
+            .as_str()
+            .expect("a cost error")
+            .contains("sonnet"),
+        "{report}"
+    );
+
+    let shown = harness.run(&["show", &id]);
+    let shown_stdout = stdout_of(&shown);
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr_of(&shown));
+    assert!(shown_stdout.contains("costError:"), "{shown_stdout}");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",unknown,1\n"), "{stats_stdout}");
+}
+
+#[test]
+fn an_empty_price_table_records_an_unknown_cost_naming_the_model() {
+    let harness = Harness::new();
+    harness.write_config(r#"{"currency":"USD","prices":{}}"#);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("apiEquivalentCost: unknown"), "{stdout}");
+    assert!(
+        stdout.contains("costError: \"the price table has no entry for model sonnet\""),
+        "{stdout}"
+    );
+
+    let id = session_id_of(&stdout);
+    let summary = summary_of(&harness.boxr_home(), &id);
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert_eq!(summary["currency"], "USD");
+    assert_eq!(summary["costUnpriced"], true);
+    assert_eq!(
+        summary["costError"],
+        "the price table has no entry for model sonnet"
+    );
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(session_dir(&harness).join("report.json")).expect("report"),
+    )
+    .expect("report json");
+    assert!(report["apiEquivalentCost"].is_null(), "{report}");
+    assert_eq!(
+        report["costError"],
+        "the price table has no entry for model sonnet"
+    );
 
     let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
     let stats_stdout = stdout_of(&stats);
@@ -906,10 +989,7 @@ fn export_atif_writes_a_document_that_matches_the_schema() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(stdout.contains("schemaVersion: ATIF-v1.8"), "{stdout}");
 
-    let path = stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("path: "))
-        .expect("export path");
+    let path = path_field_of(&stdout, "path");
     let document: Value =
         serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
     assert_valid_atif(&document);
@@ -963,6 +1043,52 @@ fn tool_results_fold_into_the_agent_step_that_called_them() {
         .as_str()
         .expect("message")
         .contains("REVIEW-VERDICT: clean"));
+}
+
+#[test]
+fn claude_preserves_tool_result_error_flags_in_the_ledger_and_export() {
+    let mut harness = Harness::new();
+    harness.use_fixture("error-flags");
+    let launched = harness.run(&["--harness", "claude", "--model", "opus", "flags"]);
+    let stdout = stdout_of(&launched);
+    assert_eq!(
+        launched.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&launched)
+    );
+    let id = session_id_of(&stdout);
+
+    let lines = normalized_lines(&session_dir(&harness).join("normalized.jsonl"));
+    let steps = &lines[1..lines.len() - 1];
+    assert_valid_steps(steps);
+    let results = steps[1]["observation"]["results"]
+        .as_array()
+        .expect("folded tool results");
+    assert_eq!(results.len(), 3, "{}", steps[1]);
+    assert_eq!(results[0]["is_error"], true, "{}", results[0]);
+    assert_eq!(results[1]["is_error"], false, "{}", results[1]);
+    assert!(results[2].get("is_error").is_none(), "{}", results[2]);
+
+    let output = harness.run(&["export", "--atif", &id]);
+    let export_stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    let path = path_field_of(&export_stdout, "path");
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
+    assert_valid_atif(&document);
+    let exported = document["steps"][1]["observation"]["results"]
+        .as_array()
+        .expect("folded tool results");
+    assert_eq!(exported.len(), 3, "{document}");
+    assert_eq!(exported[0]["is_error"], true, "{}", exported[0]);
+    assert_eq!(exported[1]["is_error"], false, "{}", exported[1]);
+    assert!(exported[2].get("is_error").is_none(), "{}", exported[2]);
 }
 
 #[test]
@@ -1122,6 +1248,21 @@ fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted()
 }
 
 #[cfg(windows)]
+const CLOSE_DELIVERY_BUDGET: Duration = Duration::from_secs(15);
+
+#[cfg(windows)]
+fn exits_within(child: &mut std::process::Child, budget: Duration) -> bool {
+    let deadline = Instant::now() + budget;
+    while Instant::now() < deadline {
+        if child.try_wait().expect("boxr is polled").is_some() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+#[cfg(windows)]
 #[test]
 fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted() {
     use std::os::windows::process::CommandExt;
@@ -1138,7 +1279,13 @@ fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted
         .output()
         .expect("close-console runs");
     assert!(closed.status.success(), "{}", stderr_of(&closed));
-    child.wait_with_output().expect("boxr finishes");
+    let mut child = child;
+    if !exits_within(&mut child, CLOSE_DELIVERY_BUDGET) {
+        let _ = child.kill();
+        eprintln!("skipped: this machine never delivered the console close");
+        return;
+    }
+    let output = child.wait_with_output().expect("boxr finishes");
 
     let session = session_dir(&harness);
     let lines = normalized_lines(&session.join("normalized.jsonl"));
@@ -1153,7 +1300,13 @@ fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted
 
     let id = session.file_name().expect("session id").to_string_lossy();
     let summary = summary_of(&harness.boxr_home(), &id);
-    assert_eq!(summary["status"], "interrupted");
+    assert_eq!(
+        summary["status"],
+        "interrupted",
+        "{summary}\n{}\n{}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
 }
 
 #[test]

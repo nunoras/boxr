@@ -17,6 +17,8 @@ use std::time::Duration;
 
 pub const DEFAULT_PORT: u16 = 4035;
 pub const DEFAULT_BIND: &str = "127.0.0.1";
+pub const TOKEN_ENV: &str = "BOXR_SERVE_TOKEN";
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 #[derive(Serialize)]
 struct SessionRow {
@@ -28,11 +30,14 @@ struct SessionRow {
 
 pub fn run(bind: IpAddr, port: u16, token: Option<String>) -> Result<i32> {
     let home = home::boxr_home()?;
+    let token = token.or_else(|| std::env::var(TOKEN_ENV).ok());
     let token = match token {
         Some(value) if value.is_empty() => {
             return Err(Fail::usage(
                 "the bearer token is empty",
-                vec!["Run `boxr serve --token <secret>` with a non-empty secret".to_string()],
+                vec![format!(
+                    "Run `boxr serve --token <secret>` or set {TOKEN_ENV} to a non-empty secret"
+                )],
             )
             .into())
         }
@@ -93,12 +98,9 @@ fn render_listen(addr: SocketAddr) -> String {
 fn handle_connection(home: &Path, token: Option<&str>, mut stream: TcpStream) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-    let mut buf = [0u8; 8192];
-    let n = stream.read(&mut buf).context("reading the HTTP request")?;
-    if n == 0 {
+    let Some(text) = read_request_head(&mut stream)? else {
         return Ok(());
-    }
-    let text = String::from_utf8_lossy(&buf[..n]);
+    };
     let request = match parse_request(&text) {
         Ok(request) => request,
         Err(message) => {
@@ -122,6 +124,34 @@ struct Request {
     method: String,
     path: String,
     authorization: Option<String>,
+}
+
+fn read_request_head(stream: &mut TcpStream) -> Result<Option<String>> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        if let Some(end) = headers_end(&buf) {
+            buf.truncate(end);
+            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+        }
+        if buf.len() >= MAX_REQUEST_BYTES {
+            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+        }
+        let n = stream
+            .read(&mut chunk)
+            .context("reading the HTTP request")?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+fn headers_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 fn authorized(request: &Request, token: Option<&str>) -> bool {
@@ -336,8 +366,13 @@ fn write_response(
         405 => "Method Not Allowed",
         _ => "Error",
     };
+    let challenge = if status == 401 {
+        "WWW-Authenticate: Bearer\r\n"
+    } else {
+        ""
+    };
     let header = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{challenge}Connection: close\r\n\r\n",
         body.len()
     );
     stream

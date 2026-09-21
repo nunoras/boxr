@@ -78,6 +78,10 @@ pub fn read_launch(session: &Session) -> Result<Option<LaunchFile>> {
     read_record(&session.launch_path())
 }
 
+pub fn read_report(session: &Session) -> Result<Option<Report>> {
+    read_record(&session.report_path())
+}
+
 pub fn record_supervisor(session: &Session, pid: u32) -> Result<()> {
     if std::env::var_os("BOXR_TEST_FAIL_SUPERVISOR_RECORD").is_some() {
         return Err(anyhow!("refusing to record the supervisor"));
@@ -292,6 +296,20 @@ fn detach(command: &mut Command) {
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    keep_caller_pipes_out_of_children();
+}
+
+#[cfg(windows)]
+fn keep_caller_pipes_out_of_children() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        unsafe {
+            SetHandleInformation(GetStdHandle(stream), HANDLE_FLAG_INHERIT, 0);
+        }
+    }
 }
 
 fn finished(session: &Session, summary: &Summary) -> Result<Report> {
@@ -329,9 +347,11 @@ fn finished(session: &Session, summary: &Summary) -> Result<Report> {
         api_equivalent_cost: summary.api_equivalent_cost,
         currency: summary.currency.clone(),
         cost_error: summary.cost_error.clone(),
+        cost_unpriced: summary.cost_unpriced,
         capture_error: None,
         summary_error: None,
         error: summary.error.clone(),
+        stderr_tail: None,
         limit_hit: summary.limit_hit,
         interrupted: summary.interrupted,
         ledger,
@@ -386,9 +406,11 @@ fn interrupted(session: &Session, launch: Option<&LaunchFile>) -> Report {
         api_equivalent_cost: pricing.api_equivalent_cost,
         currency: pricing.currency.clone(),
         cost_error: pricing.error.clone(),
+        cost_unpriced: pricing.unpriced,
         capture_error: totals.error,
         summary_error: None,
         error: None,
+        stderr_tail: None,
         limit_hit: false,
         interrupted: true,
         ledger: Ledger::Interrupted,
@@ -432,6 +454,7 @@ fn append_summary(session: &Session, report: &Report) {
         api_equivalent_cost: report.api_equivalent_cost,
         currency: report.currency.clone(),
         cost_error: report.cost_error.clone(),
+        cost_unpriced: report.cost_unpriced,
         kind: report.kind.clone(),
         kind_source: report.kind_source.clone(),
         interrupted: report.interrupted,

@@ -207,7 +207,14 @@ impl Harness {
     }
 
     pub fn spawn(&self, args: &[&str]) -> Child {
+        self.spawn_with_env(args, &[])
+    }
+
+    pub fn spawn_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Child {
         let mut command = self.command(args, Some(&self.bin_dir));
+        for (name, value) in envs {
+            command.env(name, value);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -364,6 +371,12 @@ pub fn field_of(stdout: &str, name: &str) -> String {
         .find_map(|line| line.trim().strip_prefix(prefix.as_str()))
         .unwrap_or_else(|| panic!("no `{name}` field in:\n{stdout}"))
         .to_string()
+}
+
+pub fn path_field_of(stdout: &str, name: &str) -> PathBuf {
+    let printed = field_of(stdout, name);
+    let path = serde_json::from_str::<String>(&printed).unwrap_or(printed);
+    PathBuf::from(path)
 }
 
 pub fn normalized_lines(path: &Path) -> Vec<Value> {

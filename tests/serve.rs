@@ -45,17 +45,13 @@ impl Server {
 
     fn request(&self, method: &str, path: &str, authorization: Option<&str>) -> (u16, String) {
         let host = self.socket_host();
-        let mut stream = TcpStream::connect((host, self.port)).expect("connect");
-        stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
         let mut request =
             format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
         if let Some(value) = authorization {
             request.push_str(&format!("Authorization: {value}\r\n"));
         }
         request.push_str("\r\n");
-        stream.write_all(request.as_bytes()).expect("write");
-        let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read");
+        let response = self.raw_request(&request);
         let status = response
             .split_whitespace()
             .nth(1)
@@ -68,6 +64,16 @@ impl Server {
             .unwrap_or_default()
             .to_string();
         (status, body)
+    }
+
+    fn raw_request(&self, request: &str) -> String {
+        let host = self.socket_host();
+        let mut stream = TcpStream::connect((host, self.port)).expect("connect");
+        stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+        stream.write_all(request.as_bytes()).expect("write");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read");
+        response
     }
 
     fn authenticated(&self, method: &str, path: &str) -> (u16, String) {
@@ -105,7 +111,11 @@ fn port_from_serve_stdout(text: &str) -> Option<u16> {
 }
 
 fn start_serve(harness: &Harness, args: &[&str]) -> Server {
-    let mut child = harness.spawn(args);
+    start_serve_env(harness, args, &[])
+}
+
+fn start_serve_env(harness: &Harness, args: &[&str], envs: &[(&str, &str)]) -> Server {
+    let mut child = harness.spawn_with_env(args, envs);
     let stdout = child.stdout.as_mut().expect("serve stdout");
     let mut buf = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -354,6 +364,107 @@ fn serve_rejects_an_empty_token() {
 }
 
 #[test]
+fn serve_reads_the_token_from_the_environment() {
+    let harness = Harness::new();
+    let mut server = start_serve_env(
+        &harness,
+        &["serve", "--port", "0"],
+        &[("BOXR_SERVE_TOKEN", "env-secret")],
+    );
+    server.token = Some("env-secret".to_string());
+
+    let (status, body) = server.request("GET", "/ps", None);
+    assert_eq!(status, 401, "{body}");
+
+    let (status, body) = server.authenticated("GET", "/ps");
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn the_token_flag_wins_over_the_environment() {
+    let harness = Harness::new();
+    let server = start_serve_env(
+        &harness,
+        &["serve", "--port", "0", "--token", "flag-secret"],
+        &[("BOXR_SERVE_TOKEN", "env-secret")],
+    );
+
+    let (status, body) = server.request("GET", "/ps", Some("Bearer env-secret"));
+    assert_eq!(status, 401, "{body}");
+
+    let (status, body) = server.authenticated("GET", "/ps");
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn serve_rejects_an_empty_token_from_the_environment() {
+    let harness = Harness::new();
+    let mut child = harness.spawn_with_env(&["serve", "--port", "0"], &[("BOXR_SERVE_TOKEN", "")]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("boxr serve accepted an empty environment token");
+        }
+        sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(2));
+    let mut stderr = String::new();
+    child
+        .stderr
+        .as_mut()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    assert!(stderr.contains("token"), "{stderr}");
+}
+
+#[test]
+fn serve_challenges_with_www_authenticate_on_401() {
+    let harness = Harness::new();
+    let server = start_server_with(&harness, &["serve", "--port", "0", "--token", "s3cret"]);
+    let response =
+        server.raw_request("GET /ps HTTP/1.1\r\nHost: boxr\r\nConnection: close\r\n\r\n");
+    assert!(response.contains("401 Unauthorized"), "{response}");
+    assert!(response.contains("WWW-Authenticate: Bearer"), "{response}");
+}
+
+#[test]
+fn serve_reads_an_authorization_header_split_across_tcp_segments() {
+    let harness = Harness::new();
+    let server = start_server_with(
+        &harness,
+        &["serve", "--port", "0", "--token", "split-secret"],
+    );
+    let host = server.socket_host();
+    let mut stream = TcpStream::connect((host, server.port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream
+        .write_all(b"GET /ps HTTP/1.1\r\nHost: boxr\r\n")
+        .expect("write the first segment");
+    stream.flush().expect("flush the first segment");
+    sleep(Duration::from_millis(50));
+    stream
+        .write_all(b"Authorization: Bearer split-secret\r\nConnection: close\r\n\r\n")
+        .expect("write the second segment");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read");
+    assert!(response.contains("200 OK"), "{response}");
+}
+
+#[test]
+fn serve_help_names_the_token_environment_variable() {
+    let harness = Harness::new();
+    let output = harness.run(&["serve", "--help"]);
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("BOXR_SERVE_TOKEN"), "{stdout}");
+}
+
+#[test]
 fn serve_requires_the_bearer_token_on_every_route_and_method() {
     let harness = Harness::new();
     let server = start_server_with(&harness, &["serve", "--port", "0", "--token", "s3cret"]);
@@ -434,4 +545,27 @@ fn serve_never_echoes_the_token() {
     );
     assert!(!stderr.contains("hunter2-secret"), "{stderr}");
     assert!(!stderr.contains("warning"), "{stderr}");
+}
+
+#[test]
+fn a_failed_session_keeps_its_stderr_out_of_the_summary_and_the_http_status() {
+    let mut harness = Harness::new();
+    harness.fail_with("7");
+    let id = detach(&harness, "hello");
+    let waited = harness.run(&["wait", &id]);
+    let stdout = stdout_of(&waited);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout.contains("stderrTail: \"fake claude failing on purpose with exit code 7\""),
+        "{stdout}"
+    );
+
+    let summary =
+        std::fs::read_to_string(harness.boxr_home().join("summary.jsonl")).expect("summary ledger");
+    assert!(!summary.contains("failing on purpose"), "{summary}");
+
+    let server = start_server(&harness);
+    let (status, body) = server.authenticated("GET", &format!("/status/{id}"));
+    assert_eq!(status, 200, "{body}");
+    assert!(!body.contains("failing on purpose"), "{body}");
 }

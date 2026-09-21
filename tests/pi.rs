@@ -2,7 +2,7 @@ mod common;
 
 use common::{
     assert_valid_atif, assert_valid_steps, example_binary, field_of, normalized_lines,
-    session_id_of, sources_of, stderr_of, stdout_of, summary_of,
+    path_field_of, session_id_of, sources_of, stderr_of, stdout_of, summary_of,
 };
 use serde_json::Value;
 use std::fs;
@@ -347,10 +347,7 @@ fn a_pi_session_exports_as_a_valid_atif_trajectory() {
     assert!(stdout.contains("schemaVersion: ATIF-v1.8"), "{stdout}");
     assert!(stdout.contains("steps: 2"), "{stdout}");
 
-    let path = stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("path: "))
-        .expect("export path");
+    let path = path_field_of(&stdout, "path");
     let document: Value =
         serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
     assert_valid_atif(&document);
@@ -410,6 +407,52 @@ fn pi_tool_results_fold_into_the_agent_step_that_called_them() {
     assert_eq!(summary["promptTokens"], 26647);
     assert_eq!(summary["completionTokens"], 131);
     assert_eq!(summary["cachedTokens"], 9216);
+}
+
+#[test]
+fn pi_preserves_tool_result_error_flags_in_the_ledger_and_export() {
+    let mut pi = Pi::new();
+    pi.use_fixture("error-flags");
+    let launched = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "flags"]);
+    let stdout = stdout_of(&launched);
+    assert_eq!(
+        launched.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&launched)
+    );
+    let id = session_id_of(&stdout);
+
+    let lines = normalized_lines(&pi.session_dir().join("normalized.jsonl"));
+    let steps = steps_of(&lines);
+    assert_valid_steps(steps);
+    let results = steps[1]["observation"]["results"]
+        .as_array()
+        .expect("folded tool results");
+    assert_eq!(results.len(), 3, "{}", steps[1]);
+    assert_eq!(results[0]["is_error"], true, "{}", results[0]);
+    assert_eq!(results[1]["is_error"], false, "{}", results[1]);
+    assert!(results[2].get("is_error").is_none(), "{}", results[2]);
+
+    let output = pi.run(&["export", "--atif", &id]);
+    let export_stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&output)
+    );
+    let path = path_field_of(&export_stdout, "path");
+    let document: Value =
+        serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
+    assert_valid_atif(&document);
+    let exported = document["steps"][1]["observation"]["results"]
+        .as_array()
+        .expect("folded tool results");
+    assert_eq!(exported.len(), 3, "{document}");
+    assert_eq!(exported[0]["is_error"], true, "{}", exported[0]);
+    assert_eq!(exported[1]["is_error"], false, "{}", exported[1]);
+    assert!(exported[2].get("is_error").is_none(), "{}", exported[2]);
 }
 
 #[test]
@@ -503,25 +546,45 @@ fn a_stderr_only_failure_records_the_stderr_tail() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(stdout.contains("status: failed"), "{stdout}");
     assert!(stdout.contains("exitCode: 1"), "{stdout}");
-    assert!(stdout.contains(message), "{stdout}");
+    assert!(
+        stdout.contains(&format!("stderrTail: \"{message}\"")),
+        "{stdout}"
+    );
 
     let status = stdout_of(&pi.run(&["status", &id]));
     assert_eq!(field_of(&status, "status"), "failed", "{status}");
-    assert!(status.contains(message), "{status}");
+    assert!(
+        status.contains(&format!("stderrTail: \"{message}\"")),
+        "{status}"
+    );
 
     let waited = stdout_of(&pi.run(&["wait", &id]));
     assert_eq!(field_of(&waited, "status"), "failed", "{waited}");
-    assert!(waited.contains(message), "{waited}");
+    assert!(
+        waited.contains(&format!("stderrTail: \"{message}\"")),
+        "{waited}"
+    );
 
     let shown = stdout_of(&pi.run(&["show", &id]));
+    assert!(
+        shown.contains(&format!("stderrTail: \"{message}\"")),
+        "{shown}"
+    );
     assert!(shown.contains("stderr.log"), "{shown}");
     assert!(shown.contains("for the harness error output"), "{shown}");
 
     let summary = summary_of(&pi.boxr_home(), &id);
     assert_eq!(summary["status"], "failed");
     assert_eq!(summary["exitCode"], 1);
-    assert_eq!(summary["error"], message);
-    assert_eq!(summary["limitHit"], false);
+    assert!(summary["error"].is_null(), "{summary}");
+    assert!(!summary.to_string().contains(message), "{summary}");
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(pi.session_dir().join("report.json")).expect("report.json"),
+    )
+    .expect("a report object");
+    assert_eq!(report["error"], Value::Null, "{report}");
+    assert_eq!(report["stderrTail"], message, "{report}");
 }
 
 #[test]
@@ -532,11 +595,20 @@ fn a_stderr_tail_is_bounded_to_the_last_kilobytes() {
     let output = pi.run(&["--harness", "pi", "--model", "xai/grok-4.5", "hello"]);
     let id = session_id_of(&stdout_of(&output));
 
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(pi.session_dir().join("report.json")).expect("report.json"),
+    )
+    .expect("a report object");
+    let tail = report["stderrTail"]
+        .as_str()
+        .expect("a recorded stderr tail");
+    assert!(tail.chars().count() <= 4096, "{}", tail.chars().count());
+    assert!(tail.ends_with("END-MARKER"), "{tail}");
+    assert!(!tail.contains("START-MARKER"), "{tail}");
+
     let summary = summary_of(&pi.boxr_home(), &id);
-    let error = summary["error"].as_str().expect("a recorded stderr tail");
-    assert!(error.chars().count() <= 4096, "{}", error.chars().count());
-    assert!(error.ends_with("END-MARKER"), "{error}");
-    assert!(!error.contains("START-MARKER"), "{error}");
+    assert!(summary["error"].is_null(), "{summary}");
+    assert!(!summary.to_string().contains("START-MARKER"), "{summary}");
 }
 
 #[test]
@@ -552,11 +624,18 @@ fn an_empty_stderr_failure_records_no_error() {
     assert!(stdout.contains("status: failed"), "{stdout}");
     assert!(stdout.contains("exitCode: 9"), "{stdout}");
     assert!(!stdout.contains("\n  error: "), "{stdout}");
+    assert!(!stdout.contains("stderrTail"), "{stdout}");
 
     let summary = summary_of(&pi.boxr_home(), &id);
     assert_eq!(summary["status"], "failed");
     assert_eq!(summary["exitCode"], 9);
     assert!(summary["error"].is_null(), "{summary}");
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(pi.session_dir().join("report.json")).expect("report.json"),
+    )
+    .expect("a report object");
+    assert!(report["stderrTail"].is_null(), "{report}");
 }
 
 #[test]

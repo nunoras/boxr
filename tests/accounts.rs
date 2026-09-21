@@ -4,6 +4,10 @@ use std::process::{Command, Output};
 
 const FIXTURE_SESSION_ID: &str = "11111111-2222-4333-8444-555555555555";
 
+fn toon_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "\\\\")
+}
+
 struct Sandbox {
     root: tempfile::TempDir,
     bin_dir: PathBuf,
@@ -162,7 +166,7 @@ fn account_add_creates_an_isolated_profile_and_runs_the_login() {
     assert!(stdout.contains("name: work"), "{stdout}");
     assert!(stdout.contains("status: created"), "{stdout}");
     assert!(stdout.contains("dir: "), "{stdout}");
-    assert!(stdout.contains(&dir.display().to_string()), "{stdout}");
+    assert!(stdout.contains(&toon_path(&dir)), "{stdout}");
     assert!(stdout.contains("help[2]:"), "{stdout}");
     assert!(stdout.contains("boxr account list"), "{stdout}");
 
@@ -305,7 +309,7 @@ fn account_list_prints_profiles_as_toon() {
     assert!(stdout.contains("  claude,work,"), "{stdout}");
     assert!(stdout.contains("  claude,personal,"), "{stdout}");
     assert!(
-        stdout.contains(&sandbox.account_dir("work").display().to_string()),
+        stdout.contains(&toon_path(&sandbox.account_dir("work"))),
         "{stdout}"
     );
     assert!(stdout.contains("help[2]:"), "{stdout}");

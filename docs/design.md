@@ -98,7 +98,9 @@ A detached supervisor appends a `supervise start <id>` line and a `supervise fin
 The lifecycle lines carry the session id and the exit code and never the prompt or the saved session metadata.
 `boxr serve [--bind <IP>] [--port N] [--token <secret>]` exposes the same read surface over HTTP as JSON so a fleet view on another machine can poll this host (default port 4035, default bind `127.0.0.1`).
 `--bind` takes exactly one IPv4 or IPv6 address, so the server never starts on whatever a shell expansion happens to produce, and binding anywhere but loopback without a token prints a warning on stderr rather than failing, because the fleet view has a reason to be reachable.
-With `--token`, every request must carry `Authorization: Bearer <secret>` and is refused with 401 before routing when it does not, so an unknown path and a mutation are as protected as a known one, and the secret never reaches the listen output, the help text or a log line.
+The token comes from `BOXR_SERVE_TOKEN` when the flag is absent, because `--token` puts the secret in the process arguments, where `/proc/<pid>/cmdline` and the shell history can read it; the flag still wins when both are given.
+With a token, every request must carry `Authorization: Bearer <secret>` and is refused with 401 before routing when it does not, so an unknown path and a mutation are as protected as a known one, and the refusal carries `WWW-Authenticate: Bearer`.
+The server reads the request up to the blank line that ends the headers instead of a single fixed-size read, so an `Authorization` header that arrives in a later TCP segment is still honoured, and the secret never reaches the listen output or a log line.
 The endpoints are `GET /ps`, `GET /status/<id>` and `GET /outcome/<id>`; anything that would mutate the ledger is refused with 405 once the request is authenticated.
 The ledger is still written only by the launch and outcome paths on this machine.
 The harness dies with boxr: on Linux it is given `PR_SET_PDEATHSIG`, and on Windows it joins a job object that kills it when boxr exits.
@@ -192,11 +194,14 @@ They cannot become their own steps: ATIF allows `observation` only on agent step
 So an agent step that carries tool calls is held back until the results for all of its calls have arrived, then appended once with the results folded in as its `observation`.
 Steps without tool calls are appended immediately, and step ids follow append order.
 Liveness lags by tool duration for held steps, and every appended line stays a valid ATIF step.
+A folded result keeps the harness's own error flag as `is_error`, taken from pi's `isError` message field and Claude's `is_error` tool result part.
+The field is written only when the harness stated it, so an explicit false and a missing flag stay distinct and no flag is inferred from the result content.
 When the harness dies before a result arrives, the held step is appended without it before the closing line, so an interrupted session still has a complete, valid file.
 
 ### Secrets
 
 The raw layer is stored verbatim with owner-only permissions (0600 files in a 0700 directory) and is never read by any model.
+The stderr tail of a failed harness process is recorded in the report only, printed by `boxr status`, `boxr wait` and `boxr show`, and never written to the summary or served over HTTP.
 The normalized and summary layers pass through redaction on write: known secret patterns (API key prefixes, JWTs, private key blocks, `KEY=value` env lines) plus user-listed values from config, replaced with `[REDACTED:<kind>]`.
 Anything sent to a model (classification, eval mining, the prompt skill) reads only redacted layers.
 The promise is "redacted where recognized", never "safe to share".
@@ -216,7 +221,7 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero. A harness process that exits non-zero without a structured error records the last 4096 bytes of its stderr, trimmed, as the session error, and the same path is named in `boxr show` help for a failed session. A structured error is richer, so it is never replaced, and a zero exit with stderr warnings stays `ok`. A harness that recovers, such as pi after a successful `auto_retry_end`, clears the pending error and limit so a later error is the one recorded; the transcript keeps every attempt either way.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero. A harness process that exits non-zero without a structured error records the last 4096 bytes of its stderr, snapped forward to a line start and trimmed, in the report as `stderrTail`; `boxr status`, `boxr wait` and `boxr show` print it, and the same path is named in `boxr show` help for a failed session. The tail stays out of `summary.jsonl` and out of every `boxr serve` response, because the raw layer is owner-only. A structured error is richer, so it is never replaced, and a zero exit with stderr warnings stays `ok`. A harness that recovers, such as pi after a successful `auto_retry_end`, clears the pending error and limit so a later error is the one recorded; the transcript keeps every attempt either way.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal. A note belongs to the verdict it was recorded with, so a later verdict recorded without `--note` clears the displayed note while the ledger keeps the earlier record.
 - Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
@@ -236,6 +241,7 @@ Three measures, each labeled:
   Cached input and reasoning tokens are subtotals of the prompt and completion counts the harness reports, so they are priced at their own rate and the rest at the input and output rates: `(prompt - cached) * input + cached * cached + (completion - reasoning) * output + reasoning * reasoning`.
   The reasoning rate maps whatever split the harness reports (Claude's `thinking_tokens`, pi's `reasoning`) onto the table, so a provider that bills thinking as ordinary output needs `reasoning` set equal to `output`.
   A model with no entry in the table records `apiEquivalentCost` as null rather than zero, so an unpriced session is never read as a free one.
+  It also records a `costError` that names the model and a `costUnpriced` flag, so the missing price is visible in the output instead of silent.
   Prices are arithmetic on the table and nothing else; boxr never fetches a price.
 - Quota share: the percentage of a subscription window consumed, from quota readings before and after, split by token share when sessions overlap. Always marked estimated.
 
@@ -243,6 +249,7 @@ Three measures, each labeled:
 
 `boxr stats` is the only source of numbers, for example `boxr stats --by model,kind --since 7d`.
 Each row carries the requested dimensions, the `currency` the cost is in, `sessions`, `tokens`, `durationMs`, the summed `apiEquivalentCost` and `unpricedSessions`, the count of sessions in that group whose model had no price.
+A priced session whose arithmetic failed records a `costError` too, and stats does not count it as unpriced.
 Cost is grouped by currency as well, because adding amounts from different currencies would mean nothing.
 Every visual view (a Lavish report, a later dashboard) is built on its output rather than querying the ledger itself.
 Stats is a direct pass over the summary JSONL: fold each session's records in order, filter by `--since`, group by the requested dimensions plus currency, and emit the TOON table.
