@@ -4,7 +4,7 @@ use common::*;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Child;
 
 #[test]
 fn a_successful_session_records_clear_exit_facts_and_no_git_evidence() {
@@ -96,7 +96,7 @@ fn an_interrupted_session_records_the_interruption_flag() {
 
 #[cfg(unix)]
 fn interrupt(boxr: &Child) {
-    let status = Command::new("kill")
+    let status = std::process::Command::new("kill")
         .args(["-INT", &boxr.id().to_string()])
         .status()
         .expect("kill runs");

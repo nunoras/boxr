@@ -41,14 +41,15 @@ over the token counts that same line records, and `currency: "USD"`.
 
 `boxr show <id>` prints the cost and currency the launch printed, and `boxr stats --by model --since 1d` prints one row `haiku,USD,1,...` whose `apiEquivalentCost` cell equals the launch output and whose `unpricedSessions` cell is `0`.
 
-The evidence directory keeps `toon.txt`, `show.txt`, `stats.txt`, `summary.jsonl`, `meta.txt` and `raw/`.
+The evidence directory keeps `launch.txt`, `show.txt`, `stats.txt`, `summary.jsonl`, `meta.txt` and `sessions/<id>/`.
 `meta.txt` also records the price table the run used as `configJson`.
 
 ## Gotchas
 
 - The model key in the price table must match the summary's `model` exactly.
   For the claude harness that is the `--model` value verbatim, so the driver prices `haiku`.
-- A recorded `costError` with a null cost means the arithmetic failed, not that the model is missing from the table.
+- A recorded `costError` with a null cost means the price is unknown, either because the model is missing from the table or because the arithmetic failed.
+  The message names the model when the table has no entry for it.
   The driver fails when the launch reports one.
 - Reasoning tokens are a subset of completion tokens and are billed at the reasoning rate, which maps whatever split the harness reports (Claude's `thinking_tokens`, pi's `reasoning`); a provider that bills thinking as ordinary output needs the reasoning rate set equal to the output rate.
   A one-line low-effort run usually records none, so the driver's table puts the reasoning rate ten times the output rate to keep the arithmetic discriminating either way.

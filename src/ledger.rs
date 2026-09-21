@@ -481,6 +481,8 @@ pub struct Summary {
     pub currency: Option<String>,
     #[serde(default, rename = "costError")]
     pub cost_error: Option<String>,
+    #[serde(default, rename = "costUnpriced")]
+    pub cost_unpriced: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -615,30 +617,54 @@ pub fn find_summary(home: &Path, id: &str) -> Result<Option<Summary>> {
     Ok(summary)
 }
 
-pub fn totals(normalized: &Path) -> Tally {
-    let mut tally = Tally::default();
+#[derive(Default)]
+pub struct Snapshot {
+    pub steps: Vec<Value>,
+    pub final_metrics: Option<FinalMetrics>,
+    pub harness_session_id: Option<String>,
+}
+
+pub fn snapshot(normalized: &Path) -> Snapshot {
+    let mut snapshot = Snapshot::default();
     let Ok(text) = fs::read_to_string(normalized) else {
-        return tally;
+        return snapshot;
     };
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         if let Some(metrics) = value.get("final_metrics") {
-            return serde_json::from_value::<FinalMetrics>(metrics.clone())
-                .map(|metrics| Tally {
-                    steps: metrics.total_steps,
-                    prompt_tokens: metrics.total_prompt_tokens,
-                    completion_tokens: metrics.total_completion_tokens,
-                    cached_tokens: metrics.total_cached_tokens,
-                    reasoning_tokens: total_reasoning_tokens(&metrics),
-                    error: None,
-                })
-                .unwrap_or(tally);
-        }
-        if value.get("step_id").is_none() {
+            snapshot.final_metrics = serde_json::from_value(metrics.clone()).ok();
             continue;
         }
+        if value.get("step_id").is_some() {
+            snapshot.steps.push(value);
+            continue;
+        }
+        if snapshot.harness_session_id.is_none() {
+            snapshot.harness_session_id = value
+                .get("extra")
+                .and_then(|extra| extra.get("harnessSessionId"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+    snapshot
+}
+
+pub fn totals_of(snapshot: &Snapshot) -> Tally {
+    if let Some(metrics) = &snapshot.final_metrics {
+        return Tally {
+            steps: metrics.total_steps,
+            prompt_tokens: metrics.total_prompt_tokens,
+            completion_tokens: metrics.total_completion_tokens,
+            cached_tokens: metrics.total_cached_tokens,
+            reasoning_tokens: total_reasoning_tokens(metrics),
+            error: None,
+        };
+    }
+    let mut tally = Tally::default();
+    for value in &snapshot.steps {
         tally.steps += 1;
         if let Some(metrics) = value.get("metrics") {
             tally.prompt_tokens += metrics
@@ -661,6 +687,10 @@ pub fn totals(normalized: &Path) -> Tally {
         }
     }
     tally
+}
+
+pub fn totals(normalized: &Path) -> Tally {
+    totals_of(&snapshot(normalized))
 }
 
 pub fn final_agent_message(normalized: &Path) -> Option<String> {

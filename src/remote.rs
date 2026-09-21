@@ -17,29 +17,25 @@ pub struct RemoteLaunch {
     pub account: Option<String>,
     pub kind: Option<String>,
     pub prompt: String,
-    pub exact_version: bool,
+    pub no_preflight: bool,
 }
 
 struct Version {
     major: u64,
     minor: u64,
-    patch: u64,
 }
 
 impl Version {
     fn parse(text: &str) -> Option<Version> {
-        let mut parts = text.split('.');
+        let core = text.split(['-', '+']).next()?;
+        let mut parts = core.split('.');
         let major = parts.next()?.parse().ok()?;
         let minor = parts.next()?.parse().ok()?;
-        let patch = parts.next()?.parse().ok()?;
+        parts.next()?.parse::<u64>().ok()?;
         if parts.next().is_some() {
             return None;
         }
-        Some(Version {
-            major,
-            minor,
-            patch,
-        })
+        Some(Version { major, minor })
     }
 
     fn same_release(&self, other: &Version) -> bool {
@@ -49,7 +45,7 @@ impl Version {
 
 pub fn launch(request: &RemoteLaunch) -> Result<i32> {
     validate_dir(request)?;
-    probe_version(&request.host, request.exact_version)?;
+    probe_version(&request.host)?;
     let output = run_ssh(
         &request.host,
         &detach_command(request),
@@ -62,10 +58,7 @@ pub fn launch(request: &RemoteLaunch) -> Result<i32> {
             first_nonempty(stderr.trim(), stdout.trim()).unwrap_or("the remote boxr launch failed");
         return Err(Fail::usage(
             format!("remote launch on `{}` failed: {detail}", request.host),
-            vec![
-                format!("ssh to `{}` and run `boxr --version`", request.host),
-                "Confirm the remote host has the same boxr version on PATH".to_string(),
-            ],
+            launch_failure_help(request),
         )
         .into());
     }
@@ -83,6 +76,28 @@ pub fn launch(request: &RemoteLaunch) -> Result<i32> {
     Ok(crate::fail::EXIT_OK)
 }
 
+fn launch_failure_help(request: &RemoteLaunch) -> Vec<String> {
+    match request.dir.as_deref() {
+        Some(dir) => vec![
+            format!(
+                "Confirm `{dir}` exists on `{}` and is a directory",
+                request.host
+            ),
+            format!(
+                "ssh to `{}` and run `cd -- {dir}` to check it",
+                request.host
+            ),
+        ],
+        None => vec![
+            format!("ssh to `{}` and run the same launch by hand", request.host),
+            format!(
+                "Check `boxr status` output on `{}` for the failure",
+                request.host
+            ),
+        ],
+    }
+}
+
 fn validate_dir(request: &RemoteLaunch) -> Result<()> {
     match request.dir.as_deref() {
         Some("") => Err(Fail::usage(
@@ -98,7 +113,7 @@ fn validate_dir(request: &RemoteLaunch) -> Result<()> {
     }
 }
 
-fn probe_version(host: &str, exact: bool) -> Result<()> {
+fn probe_version(host: &str) -> Result<()> {
     let output = run_ssh(host, "boxr --version", "probing remote boxr")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -135,24 +150,14 @@ fn probe_version(host: &str, exact: bool) -> Result<()> {
             vec!["Reinstall boxr from a released binary".to_string()],
         )
     })?;
-    let matches = if exact {
-        remote.major == local.major && remote.minor == local.minor && remote.patch == local.patch
-    } else {
-        remote.same_release(&local)
-    };
+    let matches = remote.same_release(&local);
     if matches {
         return Ok(());
     }
-    let requirement = if exact {
-        format!("--require-exact-version needs {LOCAL_VERSION} on `{host}`")
-    } else {
-        "Remote launches need the same major and minor version on both hosts".to_string()
-    };
     Err(Fail::usage(
         format!("remote boxr on `{host}` is {remote_text}, local is {LOCAL_VERSION}"),
         vec![
-            requirement,
-            format!("Run `boxr --remote {host} --require-exact-version` only against an exactly matching build"),
+            "Remote launches need the same major and minor version on both hosts".to_string(),
             format!("Check the remote with `ssh {host} 'boxr --version'`"),
         ],
     )
@@ -187,6 +192,9 @@ fn build_detach_args(request: &RemoteLaunch) -> Vec<String> {
     if let Some(kind) = &request.kind {
         args.push("--kind".to_string());
         args.push(kind.clone());
+    }
+    if request.no_preflight {
+        args.push("--no-preflight".to_string());
     }
     args.push(request.prompt.clone());
     args

@@ -56,6 +56,12 @@ fn state_of(stdout: &str) -> String {
     field_of(stdout, "state")
 }
 
+fn activity_of(stdout: &str) -> String {
+    field_of(stdout, "lastActivity")
+        .trim_matches('"')
+        .to_string()
+}
+
 #[test]
 fn the_reported_version_meets_the_minimum_depot_accepts() {
     let harness = Harness::new();
@@ -151,7 +157,7 @@ fn wait_reports_a_failed_turn_with_exit_zero() {
     assert_eq!(state_of(&stdout), "failed", "{stdout}");
     assert!(stdout.contains("exitCode: 7"), "{stdout}");
     assert!(
-        stdout.contains("error: \"fake claude failing on purpose with exit code 7\""),
+        stdout.contains("stderrTail: \"fake claude failing on purpose with exit code 7\""),
         "{stdout}"
     );
 
@@ -159,16 +165,17 @@ fn wait_reports_a_failed_turn_with_exit_zero() {
     assert_eq!(state_of(&status), "failed", "{status}");
     assert!(status.contains("exitCode: 7"), "{status}");
     assert!(
-        status.contains("error: \"fake claude failing on purpose with exit code 7\""),
+        status.contains("stderrTail: \"fake claude failing on purpose with exit code 7\""),
         "{status}"
     );
 
     let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["status"], "failed");
     assert_eq!(summary["exitCode"], 7);
-    assert_eq!(
-        summary["error"],
-        "fake claude failing on purpose with exit code 7"
+    assert!(summary["error"].is_null(), "{summary}");
+    assert!(
+        !summary.to_string().contains("failing on purpose"),
+        "{summary}"
     );
 }
 
@@ -211,6 +218,11 @@ fn help_mentions_retry_and_the_detached_resume() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(mentions(&stdout, "retry"), "{stdout}");
+
+    let resume = harness.run(&["resume", "--help"]);
+    let resume_help = stdout_of(&resume);
+    assert_eq!(resume.status.code(), Some(0), "{}", stderr_of(&resume));
+    assert!(mentions(&resume_help, "--detach"), "{resume_help}");
 }
 
 #[test]
@@ -260,16 +272,13 @@ fn a_running_session_reports_last_activity_and_the_current_tool() {
     harness.hang_for(8, 3000);
 
     let id = detach(&harness, "review");
-    let status = await_status(
-        &harness,
-        &id,
-        &[
-            "currentTool: Read",
-            &format!("lastActivity: \"{TOOLS_FINAL_MESSAGE_TIMESTAMP}\""),
-        ],
-    );
+    let status = await_status(&harness, &id, &["currentTool: Read"]);
     assert!(status.contains("state: running"), "{status}");
     assert!(status.contains("steps: 1"), "{status}");
+    assert!(
+        activity_of(&status).as_str() >= TOOLS_FINAL_MESSAGE_TIMESTAMP,
+        "{status}"
+    );
 
     let again = stdout_of(&harness.run(&["status", &id]));
     assert!(again.contains("steps: 1"), "{again}");
@@ -344,6 +353,52 @@ fn show_truncates_the_final_message_and_message_prints_it_whole() {
     assert!(!raw_stdout.contains("session:"), "{raw_stdout}");
     assert_eq!(raw_stdout.trim_end(), full.trim_end(), "{raw_stdout}");
     assert!(raw_stdout.contains("\n\n"), "{raw_stdout}");
+}
+
+#[test]
+fn last_activity_tracks_a_growing_transcript_during_a_hung_tool_call() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_for(8, 4000);
+    harness.grow_while_hung(100);
+
+    let id = detach(&harness, "review");
+    let first = await_status(&harness, &id, &["currentTool: Read"]);
+    let first_activity = activity_of(&first);
+    sleep(Duration::from_millis(1200));
+
+    let second = stdout_of(&harness.run(&["status", &id]));
+    assert!(second.contains("currentTool: Read"), "{second}");
+    let second_activity = activity_of(&second);
+    assert!(
+        second_activity > first_activity,
+        "lastActivity stayed at {first_activity} and then {second_activity}"
+    );
+
+    let waited = harness.run(&["wait", &id]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+}
+
+#[test]
+fn show_message_strips_terminal_control_characters() {
+    let mut harness = Harness::new();
+    harness.use_fixture("control-chars");
+
+    let launched = harness.run(&["--harness", "claude", "--model", "opus", "review"]);
+    assert_eq!(launched.status.code(), Some(0), "{}", stderr_of(&launched));
+    let id = session_id_of(&stdout_of(&launched));
+
+    let raw = harness.run(&["show", "--message", &id]);
+    let text = stdout_of(&raw);
+    assert_eq!(raw.status.code(), Some(0), "{}", stderr_of(&raw));
+    assert!(text.contains("clean"), "{text}");
+    assert!(text.contains("second line"), "{text}");
+    assert!(
+        !text
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t'),
+        "{text:?}"
+    );
 }
 
 #[test]

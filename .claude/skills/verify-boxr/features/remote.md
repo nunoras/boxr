@@ -11,7 +11,6 @@ boxr --remote box-one --harness claude --model haiku "reply with the single word
 ```
 
 `--remote-dir <path>` starts the session in that remote directory.
-`--require-exact-version` refuses any version difference, including a patch difference.
 
 ## Drive it
 

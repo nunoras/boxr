@@ -22,13 +22,13 @@ mod skill;
 mod stats;
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use config::Config;
 use detached::State;
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
 use ledger::{Summary, SummaryUpdate};
-use output::{one_line, Kind, Toon, MESSAGE_LIMIT};
+use output::{one_line, without_terminal_controls, Kind, Toon, MESSAGE_LIMIT};
 use session::Session;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
@@ -41,11 +41,7 @@ use std::time::{Duration, Instant};
 const STOP_BUDGET: Duration = Duration::from_secs(10);
 const KILL_BUDGET: Duration = Duration::from_secs(5);
 const DEFAULT_LIST_LIMIT: usize = 20;
-
-const COMMANDS: &[&str] = &[
-    "show", "export", "account", "ps", "status", "wait", "tail", "stop", "resume", "retry",
-    "outcome", "stats", "list", "models", "serve", "skill",
-];
+const CLOSE_COMMAND_DISTANCE: usize = 2;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -84,9 +80,8 @@ struct Cli {
     #[arg(long, value_name = "PATH", requires = "remote")]
     remote_dir: Option<String>,
 
-    #[arg(long, requires = "remote")]
-    require_exact_version: bool,
-
+    #[arg(long)]
+    no_preflight: bool,
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
 }
@@ -397,7 +392,7 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
             account,
             kind,
             prompt,
-            exact_version: cli.require_exact_version,
+            no_preflight: cli.no_preflight,
         });
     }
 
@@ -419,7 +414,12 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
         kind_source,
     };
 
-    preflight_model(&adapter, &request.model, profile.as_deref())?;
+    preflight_model(
+        &adapter,
+        &request.model,
+        profile.as_deref(),
+        cli.no_preflight,
+    )?;
 
     if cli.detach {
         let launch = run::prepare(&adapter, &request, home)?;
@@ -652,23 +652,45 @@ fn refuse_bare_command(cli: &Cli, prompt: &str) -> Result<()> {
     if explicit {
         return Ok(());
     }
-    let launch_help =
-        format!("Pass `--harness <h> --model <m>` to launch \"{prompt}\" as a prompt");
+    let cli_command = Cli::command();
+    let names: Vec<&str> = cli_command
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set())
+        .map(|command| command.get_name())
+        .collect();
     let mut help = Vec::new();
-    if let Some(command) = harness::closest_match(COMMANDS.iter().copied(), prompt) {
-        help.push(format!("Did you mean `{command}`?"));
+    if let Some(command) = harness::closest_match(names.iter().copied(), prompt) {
+        if harness::edit_distance(&command, prompt) <= CLOSE_COMMAND_DISTANCE {
+            help.push(format!("Did you mean `{command}`?"));
+        }
     }
-    help.push(launch_help);
-    Err(Fail::usage(format!("unknown command `{prompt}`"), help).into())
+    help.push(
+        "To run it as a prompt, pass `--harness <h> --model <m>`, or quote a longer prompt"
+            .to_string(),
+    );
+    Err(Fail::usage(format!("`{prompt}` is not a boxr command"), help).into())
 }
 
 fn preflight_model(
     adapter: &std::sync::Arc<dyn harness::Harness>,
     model: &str,
     account: Option<&Path>,
+    skip: bool,
 ) -> Result<()> {
-    let Some(catalog) = run::model_catalog(adapter.as_ref(), account)? else {
+    if skip {
         return Ok(());
+    }
+    let catalog = match run::model_catalog(adapter.as_ref(), account) {
+        Ok(Some(catalog)) => catalog,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            let detail = one_line(&format!("{error:#}"), MESSAGE_LIMIT);
+            eprintln!(
+                "warning: skipping the model preflight for harness `{}`: {detail}",
+                adapter.id()
+            );
+            return Ok(());
+        }
     };
     if catalog.iter().any(|entry| entry.full_id() == model) {
         return Ok(());
@@ -772,7 +794,7 @@ fn list(home: &Path, all: bool, limit: Option<usize>) -> Result<i32> {
         .collect();
     let mut toon = Toon::new();
     toon.table(
-        "sessions",
+        "list",
         &[
             "id",
             "state",
@@ -1132,7 +1154,7 @@ fn render_stopped(session: &Session, summary: &Summary, action: &str) -> String 
     toon.section("stop")
         .field("id", &session.id)
         .field("action", action);
-    summarize(&mut toon, summary);
+    summarize(&mut toon, summary, None);
     toon.list(
         "help",
         &[
@@ -1364,6 +1386,7 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let final_message = resolve_final_message(&session);
     if message {
         if let Some(text) = &final_message {
+            let text = without_terminal_controls(text);
             print!("{text}");
             if !text.ends_with('\n') {
                 println!();
@@ -1374,8 +1397,9 @@ fn show(id: &str, message: bool) -> Result<i32> {
     let truncated = final_message
         .as_deref()
         .map(|text| one_line(text, MESSAGE_LIMIT));
+    let stderr_tail = detached::read_report(&session)?.and_then(|report| report.stderr_tail);
     let mut toon = Toon::new();
-    summarize(&mut toon, &summary);
+    summarize(&mut toon, &summary, stderr_tail.as_deref());
     toon.section("message")
         .optional("text", truncated.as_deref());
     toon.section("files")
@@ -1413,7 +1437,7 @@ fn resolve_final_message(session: &Session) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
-fn summarize(toon: &mut Toon, summary: &Summary) {
+fn summarize(toon: &mut Toon, summary: &Summary, stderr_tail: Option<&str>) {
     toon.section("session")
         .field("id", &summary.id)
         .field("status", &summary.status)
@@ -1450,6 +1474,9 @@ fn summarize(toon: &mut Toon, summary: &Summary) {
     }
     if let Some(error) = &summary.error {
         toon.field("error", &one_line(error, MESSAGE_LIMIT));
+    }
+    if let Some(tail) = stderr_tail {
+        toon.field("stderrTail", &one_line(tail, MESSAGE_LIMIT));
     }
     if let Some(evidence) = &summary.git {
         toon.section("git")

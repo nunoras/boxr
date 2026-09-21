@@ -28,7 +28,8 @@ boxr --harness <h> --model <m> --effort <e> --account <profile> [--kind <k>] "<p
 ```
 
 Harness, model, effort and account are explicit, with defaults from config.
-A single bare word with no launch flag is refused as an unknown command, naming the closest command, so a mistyped subcommand never starts a paid session by accident.
+A single bare word with no launch flag is refused, so a mistyped subcommand never starts a paid session by accident.
+The refusal says the word is not a boxr command and points at `--harness` and `--model` for running it as a prompt; it names the closest command only when the edit distance is small.
 A multiword prompt, or a single-word prompt alongside `--harness`, `--model`, `--detach`, `--remote`, `--effort`, `--account` or `--kind`, still launches.
 
 ### Headless (default)
@@ -38,7 +39,7 @@ By default the call blocks and prints a short TOON result: status, session id, t
 `--detach` returns the session id immediately and the session keeps running in the background under boxr.
 Detached sessions are managed with `boxr ps`, `boxr wait <id>` (optional timeout), `boxr status <id>`, `boxr tail <id>` and `boxr stop <id>`.
 `boxr --remote <host> ...` forwards a headless launch over ssh: it probes `boxr --version` on the host, requires the same major and minor version as the local binary, runs `boxr --detach` there with the same harness, model, effort, account and kind, prints the remote session id, and exits.
-A patch difference within that major and minor is accepted, and `--require-exact-version` tightens the check to an exact match.
+A patch difference within that major and minor is accepted.
 `--remote-dir <path>` changes the remote shell into that directory before the launch, so the session starts there; without it the session starts in the remote login directory.
 boxr quotes the path for a POSIX shell, so a space, a quote or a shell metacharacter in the directory name stays literal.
 The session is recorded only in the remote ledger; there is no cross-machine store.
@@ -86,13 +87,13 @@ A caller that reads a non-zero exit as a failure cannot otherwise tell a failed 
 A blocking launch is the one that differs: its process exit follows the turn outcome, not only the harness process exit code, because its contract is the harness result rather than a report about it.
 It exits non-zero when the turn is `failed` or `interrupted`, including when the harness process still exited zero but reported an error or a limit, and exits zero only when the turn is `ok`.
 `boxr show` names the captured stderr file in its help when a session did not succeed, the same way a failed launch does.
-`boxr show` prints the final assistant message as `message.text`, truncated to 200 characters, and `boxr show --message <id>` prints the full text instead with no TOON wrapper and no truncation.
+`boxr show` prints the final assistant message as `message.text`, truncated to 200 characters, and `boxr show --message <id>` prints the full text instead with no TOON wrapper, no truncation, and terminal control characters other than newline and tab stripped.
 The message comes from the last agent step in the normalized ledger, falling back to the launch result when the ledger recorded none, so a session that wrote no final message reads `message.text: null` and `--message` prints nothing.
 The shape of `boxr ps`, `boxr status` and `boxr wait` is a contract other tools read, so it is fixed: `boxr ps` prints `sessions[N]{id,state,harness,model}:` with one row per running session, `boxr status` prints `state:` from `running`, `finished`, `stopped`, `interrupted` and `failed`, and `boxr wait` prints `status:` from `ok`, `failed`, `interrupted` and `running`.
 `status` is the turn outcome and `state` is the session lifecycle, so a finished session reads `state: finished` with `status: ok`.
-A running session adds two fields to `status`, `wait` and `GET /status/<id>`: `lastActivity`, the most recent normalized step timestamp, and `currentTool`, the newest tool call the harness started and has not answered, or `null` when no call is in flight.
+A running session adds two fields to `status`, `wait` and `GET /status/<id>`: `lastActivity`, the more recent of the newest normalized step timestamp and the harness transcript's modification time, and `currentTool`, the newest tool call the harness started and has not answered, or `null` when no call is in flight.
 Both fields are additive, so `boxr ps` keeps its four columns and the existing `status` and `wait` fields do not move.
-`lastActivity` falls back to the normalized file's modification time and then to the launch time, and `currentTool` reads the harness transcript when the held tool call has not reached the normalized ledger yet, so a long tool call does not read as a hang.
+`lastActivity` falls back to the normalized file's modification time and then to the launch time only when the newest step timestamp and the transcript modification time are both unavailable, so a step held for a long tool call does not freeze it, and `currentTool` reads the harness transcript when the held tool call has not reached the normalized ledger yet, so a long tool call does not read as a hang.
 boxr's own lifecycle maps onto the five states rather than adding to them: a turn with status `ok` is `finished`, a harness failure or reported error/limit is `failed`, and a session ended from outside is `interrupted`.
 `stopped` is never printed, because `boxr stop` ends a session from outside and that is already `interrupted`.
 `boxr tail` streams the normalized ledger as it is appended.
@@ -132,8 +133,10 @@ A harness may expose its own model catalog, and `boxr models --harness <h> [--ac
 boxr runs the harness's discovery command (for pi, `pi --list-models`), parses the provider and model columns behind the adapter, and never keeps a hardcoded model list or launches a model to discover an id.
 A harness without discovery is a usage error that names the harness, so `boxr models --harness claude` says claude does not expose a catalog rather than printing an empty table.
 For pi, a fresh launch checks the exact `provider/model` against the discovered catalog before the session directory is allocated or the harness is spawned, so an unknown id is a usage error that names the closest full id by deterministic edit distance and creates no session.
+`--no-preflight` skips that check for a single launch.
+A discovery command that cannot run, exits non-zero, or prints nothing parseable is a one-line warning on stderr and the launch proceeds without the check, so a stale or unreadable catalog never blocks a paid run.
+Only a catalog that was read successfully and lacks the model refuses the launch.
 Resume and retry reuse the model the original session recorded, which that session's fresh launch already checked.
-A discovery command that cannot run or exits non-zero fails the launch clearly, so boxr never passes an unvalidated model to a paid run.
 The account's config directory is applied to the discovery command exactly as it is applied to a launch, so a profile sees its own catalog.
 
 ## Accounts: profiles and subscriptions
@@ -170,7 +173,7 @@ Three layers per session:
    When boxr itself is asked to stop, it kills the harness, lets the transcript follower finish, writes the closing line and a summary marked `interrupted`, and only then exits.
    That includes closing the console, logoff and shutdown on Windows, where boxr holds the console control event until the summary is written, within Windows' five second budget for those events.
 
-`boxr list [--all] [--limit N]` reads the folded summary ledger and prints a `sessions[N]{id,state,harness,model,status,start,durationMs,kind,verdict}:` table, newest first by `start`.
+`boxr list [--all] [--limit N]` reads the folded summary ledger and prints a `list[N]{id,state,harness,model,status,start,durationMs,kind,verdict}:` table, newest first by `start`.
 A session whose supervisor is still alive appears once, with `state: running` and `status: running`, even before its summary exists; every other row is `state: finished` with the recorded turn status and the verdict the outcome records folded in.
 The default view shows the 20 most recent sessions.
 `--all` drops the limit unless `--limit` is also given, in which case the explicit limit wins.
@@ -195,11 +198,14 @@ They cannot become their own steps: ATIF allows `observation` only on agent step
 So an agent step that carries tool calls is held back until the results for all of its calls have arrived, then appended once with the results folded in as its `observation`.
 Steps without tool calls are appended immediately, and step ids follow append order.
 Liveness lags by tool duration for held steps, and every appended line stays a valid ATIF step.
+A folded result keeps the harness's own error flag as `is_error`, taken from pi's `isError` message field and Claude's `is_error` tool result part.
+The field is written only when the harness stated it, so an explicit false and a missing flag stay distinct and no flag is inferred from the result content.
 When the harness dies before a result arrives, the held step is appended without it before the closing line, so an interrupted session still has a complete, valid file.
 
 ### Secrets
 
 The raw layer is stored verbatim with owner-only permissions (0600 files in a 0700 directory) and is never read by any model.
+The stderr tail of a failed harness process is recorded in the report only, printed by `boxr status`, `boxr wait` and `boxr show`, and never written to the summary or served over HTTP.
 The normalized and summary layers pass through redaction on write: known secret patterns (API key prefixes, JWTs, private key blocks, `KEY=value` env lines) plus user-listed values from config, replaced with `[REDACTED:<kind>]`.
 Anything sent to a model (classification, eval mining, the prompt skill) reads only redacted layers.
 The promise is "redacted where recognized", never "safe to share".
@@ -219,7 +225,7 @@ Heuristics (no file edits, docs-only changes) feed hints into that pass and are 
 
 Four separate fields, never blended into one score:
 
-- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero. A harness process that exits non-zero without a structured error records the last 4096 bytes of its stderr, trimmed, as the session error, and the same path is named in `boxr show` help for a failed session. A structured error is richer, so it is never replaced, and a zero exit with stderr warnings stays `ok`. A harness that recovers, such as pi after a successful `auto_retry_end`, clears the pending error and limit so a later error is the one recorded; the transcript keeps every attempt either way.
+- Exit facts: exit code and interruption always, plus the harness error and limit hit when the harness reports them. Automatic. The claude and pi adapters both report an error or a limit when the harness stream carries one; a reported error or limit marks the session `failed` even when the harness process still exits zero. A harness process that exits non-zero without a structured error records the last 4096 bytes of its stderr, snapped forward to a line start and trimmed, in the report as `stderrTail`; `boxr status`, `boxr wait` and `boxr show` print it, and the same path is named in `boxr show` help for a failed session. The tail stays out of `summary.jsonl` and out of every `boxr serve` response, because the raw layer is owner-only. A structured error is richer, so it is never replaced, and a zero exit with stderr warnings stays `ok`. A harness that recovers, such as pi after a successful `auto_retry_end`, clears the pending error and limit so a later error is the one recorded; the transcript keeps every attempt either way.
 - Caller verdict: `boxr outcome <id> success|partial|failed --note "..."`. Optional and the strongest signal. A note belongs to the verdict it was recorded with, so a later verdict recorded without `--note` clears the displayed note while the ledger keeps the earlier record.
 - Git evidence: commits made, files changed, and later whether those commits were reverted, re-checked with `boxr outcome --check-reverted <id>`. Automatic.
 - Inferred judgment: the post-session pass judges whether the task was finished. Labeled inferred.
@@ -239,6 +245,7 @@ Three measures, each labeled:
   Cached input and reasoning tokens are subtotals of the prompt and completion counts the harness reports, so they are priced at their own rate and the rest at the input and output rates: `(prompt - cached) * input + cached * cached + (completion - reasoning) * output + reasoning * reasoning`.
   The reasoning rate maps whatever split the harness reports (Claude's `thinking_tokens`, pi's `reasoning`) onto the table, so a provider that bills thinking as ordinary output needs `reasoning` set equal to `output`.
   A model with no entry in the table records `apiEquivalentCost` as null rather than zero, so an unpriced session is never read as a free one.
+  It also records a `costError` that names the model and a `costUnpriced` flag, so the missing price is visible in the output instead of silent.
   Prices are arithmetic on the table and nothing else; boxr never fetches a price.
 - Quota share: the percentage of a subscription window consumed, from quota readings before and after, split by token share when sessions overlap. Always marked estimated.
 
@@ -246,6 +253,7 @@ Three measures, each labeled:
 
 `boxr stats` is the only source of numbers, for example `boxr stats --by model,kind --since 7d`.
 Each row carries the requested dimensions, the `currency` the cost is in, `sessions`, `tokens`, `durationMs`, the summed `apiEquivalentCost` and `unpricedSessions`, the count of sessions in that group whose model had no price.
+A priced session whose arithmetic failed records a `costError` too, and stats does not count it as unpriced.
 Cost is grouped by currency as well, because adding amounts from different currencies would mean nothing.
 Every visual view (a Lavish report, a later dashboard) is built on its output rather than querying the ledger itself.
 Stats is a direct pass over the summary JSONL: fold each session's records in order, filter by `--since`, group by the requested dimensions plus currency, and emit the TOON table.
