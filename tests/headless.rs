@@ -1119,10 +1119,52 @@ fn interrupting_boxr_still_closes_the_ledger_and_marks_the_session_interrupted()
 }
 
 #[cfg(windows)]
+fn console_windows_receive_messages() -> bool {
+    #[repr(C)]
+    struct UserObjectFlags {
+        inherit: i32,
+        reserved: i32,
+        flags: u32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetProcessWindowStation() -> isize;
+        fn GetUserObjectInformationW(
+            object: isize,
+            index: i32,
+            info: *mut UserObjectFlags,
+            length: u32,
+            needed: *mut u32,
+        ) -> i32;
+    }
+    const UOI_FLAGS: i32 = 1;
+    const WSF_VISIBLE: u32 = 1;
+    let mut station = UserObjectFlags {
+        inherit: 0,
+        reserved: 0,
+        flags: 0,
+    };
+    let read = unsafe {
+        GetUserObjectInformationW(
+            GetProcessWindowStation(),
+            UOI_FLAGS,
+            &mut station,
+            std::mem::size_of::<UserObjectFlags>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    read != 0 && station.flags & WSF_VISIBLE != 0
+}
+
+#[cfg(windows)]
 #[test]
 fn closing_the_console_still_closes_the_ledger_and_marks_the_session_interrupted() {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
+    if !console_windows_receive_messages() {
+        eprintln!("skipped: this window station is not interactive, so a console cannot be closed");
+        return;
+    }
     let mut harness = Harness::new();
     harness.use_fixture("tools");
     harness.hang_after(9);
