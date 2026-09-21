@@ -399,9 +399,7 @@ fn an_unknown_kind_lists_the_valid_kinds() {
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("unknown kind `unknown`"), "{stderr}");
     assert!(
-        stderr.contains(
-            "Valid kinds: build, chore, describe, docs, fix, plan, research, review"
-        ),
+        stderr.contains("Valid kinds: build, chore, describe, docs, fix, plan, research, review"),
         "{stderr}"
     );
 }
@@ -673,6 +671,8 @@ fn a_summary_records_the_api_equivalent_cost_from_the_price_table() {
     let summary = summary_of(&harness.boxr_home(), &id);
     assert_eq!(summary["currency"], "USD");
     assert_eq!(summary["reasoningTokens"], 0);
+    assert!(summary["costError"].is_null(), "{summary}");
+    assert_eq!(summary["costUnpriced"], false);
     assert_close(summary["apiEquivalentCost"].as_f64(), 0.055_109_4);
 
     let shown = harness.run(&["show", &id]);
@@ -683,6 +683,16 @@ fn a_summary_records_the_api_equivalent_cost_from_the_price_table() {
         "{shown_stdout}"
     );
     assert!(shown_stdout.contains("currency: USD"), "{shown_stdout}");
+    assert!(!shown_stdout.contains("costError:"), "{shown_stdout}");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",0.055109,0\n"), "{stats_stdout}");
 }
 
 #[test]
@@ -844,10 +854,81 @@ fn an_unpriced_model_records_an_unknown_cost() {
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     assert!(stdout.contains("apiEquivalentCost: unknown"), "{stdout}");
+    assert!(
+        stdout.contains("costError: \"the price table has no entry for model sonnet\""),
+        "{stdout}"
+    );
 
-    let summary = summary_of(&harness.boxr_home(), &session_id_of(&stdout));
+    let id = session_id_of(&stdout);
+    let summary = summary_of(&harness.boxr_home(), &id);
     assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
     assert_eq!(summary["currency"], "USD");
+    assert_eq!(summary["costUnpriced"], true);
+    let error = summary["costError"].as_str().expect("a cost error");
+    assert!(error.contains("sonnet"), "{error}");
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(session_dir(&harness).join("report.json")).expect("report"),
+    )
+    .expect("report json");
+    assert!(report["apiEquivalentCost"].is_null(), "{report}");
+    assert_eq!(report["costUnpriced"], true);
+    assert!(
+        report["costError"]
+            .as_str()
+            .expect("a cost error")
+            .contains("sonnet"),
+        "{report}"
+    );
+
+    let shown = harness.run(&["show", &id]);
+    let shown_stdout = stdout_of(&shown);
+    assert_eq!(shown.status.code(), Some(0), "{}", stderr_of(&shown));
+    assert!(shown_stdout.contains("costError:"), "{shown_stdout}");
+
+    let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
+    let stats_stdout = stdout_of(&stats);
+    assert_eq!(stats.status.code(), Some(0), "{}", stderr_of(&stats));
+    assert!(
+        stats_stdout.contains("sonnet,USD,1,61828,"),
+        "{stats_stdout}"
+    );
+    assert!(stats_stdout.contains(",unknown,1\n"), "{stats_stdout}");
+}
+
+#[test]
+fn an_empty_price_table_records_an_unknown_cost_naming_the_model() {
+    let harness = Harness::new();
+    harness.write_config(r#"{"currency":"USD","prices":{}}"#);
+    let output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(stdout.contains("apiEquivalentCost: unknown"), "{stdout}");
+    assert!(
+        stdout.contains("costError: \"the price table has no entry for model sonnet\""),
+        "{stdout}"
+    );
+
+    let id = session_id_of(&stdout);
+    let summary = summary_of(&harness.boxr_home(), &id);
+    assert!(summary["apiEquivalentCost"].is_null(), "{summary}");
+    assert_eq!(summary["currency"], "USD");
+    assert_eq!(summary["costUnpriced"], true);
+    assert_eq!(
+        summary["costError"],
+        "the price table has no entry for model sonnet"
+    );
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(session_dir(&harness).join("report.json")).expect("report"),
+    )
+    .expect("report json");
+    assert!(report["apiEquivalentCost"].is_null(), "{report}");
+    assert_eq!(
+        report["costError"],
+        "the price table has no entry for model sonnet"
+    );
 
     let stats = harness.run(&["stats", "--by", "model", "--since", "7d"]);
     let stats_stdout = stdout_of(&stats);

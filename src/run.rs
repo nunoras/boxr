@@ -417,6 +417,7 @@ pub fn headless(
         api_equivalent_cost: pricing.api_equivalent_cost,
         currency: pricing.currency.clone(),
         cost_error: pricing.error.clone(),
+        cost_unpriced: pricing.unpriced,
         kind: request.kind.clone(),
         kind_source: request.kind_source.clone(),
     };
@@ -447,6 +448,7 @@ pub fn headless(
         api_equivalent_cost: pricing.api_equivalent_cost,
         currency: pricing.currency,
         cost_error: pricing.error,
+        cost_unpriced: pricing.unpriced,
         capture_error: tally.error,
         summary_error: summary_error.clone(),
         error: harness_error,

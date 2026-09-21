@@ -481,6 +481,8 @@ pub struct Summary {
     pub currency: Option<String>,
     #[serde(default, rename = "costError")]
     pub cost_error: Option<String>,
+    #[serde(default, rename = "costUnpriced")]
+    pub cost_unpriced: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
