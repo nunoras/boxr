@@ -413,10 +413,7 @@ fn pi_preserves_tool_result_error_flags_in_the_ledger_and_export() {
         "stderr: {}",
         stderr_of(&output)
     );
-    let path = export_stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("path: "))
-        .expect("export path");
+    let path = path_field_of(&export_stdout, "path");
     let document: Value =
         serde_json::from_str(&fs::read_to_string(path).expect("trajectory")).expect("json");
     assert_valid_atif(&document);
