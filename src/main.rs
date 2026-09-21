@@ -23,7 +23,7 @@ mod stats;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use config::Config;
-use detached::{LaunchFile, State};
+use detached::State;
 use fail::{Fail, EXIT_INTERNAL, EXIT_OK};
 use harness::{LaunchMode, LaunchRequest};
 use ledger::{Summary, SummaryUpdate};
@@ -141,11 +141,27 @@ enum Command {
         id: String,
     },
     Resume {
+        #[arg(long)]
+        detach: bool,
+
         #[arg(value_name = "ID")]
         id: String,
 
         #[arg(value_name = "PROMPT")]
         prompt: String,
+    },
+    /// Re-drive the saved prompt of a session that stopped at a harness limit
+    ///
+    /// `boxr retry <id>` runs exactly one continuation of a finished session whose
+    /// summary recorded `limitHit`, reusing its saved harness, model, effort, profile,
+    /// cwd, kind and prompt. It never retries automatically, so a retry that hits the
+    /// limit again stops there.
+    Retry {
+        #[arg(long)]
+        detach: bool,
+
+        #[arg(value_name = "ID")]
+        id: String,
     },
     /// Record the caller's verdict on a session, or check whether its commits were reverted
     ///
@@ -282,7 +298,8 @@ fn dispatch() -> Result<i32> {
         Some(Command::Wait { timeout, id }) => wait(&id, timeout),
         Some(Command::Tail { id }) => tail(&id),
         Some(Command::Stop { id }) => stop(&id),
-        Some(Command::Resume { id, prompt }) => resume(&id, &prompt),
+        Some(Command::Resume { detach, id, prompt }) => resume(&id, &prompt, detach),
+        Some(Command::Retry { detach, id }) => retry(&id, detach),
         Some(Command::Outcome {
             check_reverted,
             id,
@@ -348,7 +365,8 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
     };
 
     if cli.detach {
-        return detach(&adapter, &request, account.as_deref(), home);
+        let launch = run::prepare(&adapter, &request, home)?;
+        return spawn_detached(&adapter, &request, launch, account.as_deref());
     }
 
     let launch = run::prepare(&adapter, &request, home)?;
@@ -368,45 +386,37 @@ fn launch(cli: Cli, home: &Path, config: &Config) -> Result<i32> {
     Ok(report::exit_code(&report))
 }
 
-fn detach(
+fn spawn_detached(
     harness: &Arc<dyn harness::Harness>,
     request: &LaunchRequest,
+    launch: run::Launch,
     account: Option<&str>,
-    home: &Path,
 ) -> Result<i32> {
-    let launch = run::prepare(harness, request, home)?;
-    let session = launch.session;
-    detached::record_launch(
-        &session,
-        &LaunchFile {
-            harness: harness.id().to_string(),
-            model: request.model.clone(),
-            effort: request.effort.clone(),
-            prompt: request.prompt.clone(),
-            cwd: request.cwd.clone(),
-            started_millis: clock::now_millis() as u64,
-            mode: "headless".to_string(),
-            profile: account.map(str::to_string),
-            resumed_from: None,
-            kind: request.kind.clone(),
-            kind_source: request.kind_source.clone(),
-            git_base: git::head(&request.cwd),
-        },
+    launch.record(
+        harness.as_ref(),
+        request,
+        account.map(str::to_string),
+        clock::now_millis() as u64,
+        git::head(&request.cwd),
     )?;
-    let mut supervisor = match detached::spawn_supervisor(&session) {
+    let session = launch.session();
+    let mut supervisor = match detached::spawn_supervisor(session) {
         Ok(child) => child,
         Err(error) => {
-            detached::abandon_detach(&session, None);
+            detached::abandon_detach(session, None);
             return Err(error);
         }
     };
     let pid = supervisor.id();
-    if let Err(error) = detached::record_supervisor(&session, pid) {
-        detached::abandon_detach(&session, Some(supervisor));
+    if let Err(error) = detached::record_supervisor(session, pid) {
+        detached::abandon_detach(session, Some(supervisor));
         return Err(error);
     }
     let _ = supervisor.try_wait();
-    print!("{}", render_detached(&session, harness, request, pid));
+    print!(
+        "{}",
+        render_detached(session, harness, request, pid, launch.resumed_from())
+    );
     Ok(EXIT_OK)
 }
 
@@ -415,6 +425,7 @@ fn render_detached(
     harness: &Arc<dyn harness::Harness>,
     request: &LaunchRequest,
     pid: u32,
+    resumed_from: Option<&str>,
 ) -> String {
     let mut toon = Toon::new();
     toon.section("session")
@@ -427,6 +438,9 @@ fn render_detached(
             request.effort.as_deref().unwrap_or("harness-default"),
         )
         .number("pid", pid);
+    if let Some(parent) = resumed_from {
+        toon.field("resumedFrom", parent);
+    }
     toon.list(
         "help",
         &[
@@ -586,6 +600,21 @@ fn profile_for(
 }
 
 fn supervise(id: &str) -> Result<i32> {
+    eprintln!("supervise start {id}");
+    let outcome = supervise_session(id);
+    match &outcome {
+        Ok(code) => eprintln!("supervise finish {id} exitCode={code}"),
+        Err(error) => {
+            let code = error
+                .downcast_ref::<Fail>()
+                .map_or(EXIT_INTERNAL, |fail| fail.code);
+            eprintln!("supervise error {id} exitCode={code}");
+        }
+    }
+    outcome
+}
+
+fn supervise_session(id: &str) -> Result<i32> {
     let home = home::boxr_home()?;
     let session = Session::open(&home, id);
     let launch = detached::read_launch(&session)?.ok_or_else(|| {
@@ -608,16 +637,34 @@ fn supervise(id: &str) -> Result<i32> {
         Some(name) => Some(profile_for(adapter.as_ref(), &home, &launch.harness, name)?),
         None => None,
     };
+    let mode = match &launch.harness_session_id {
+        Some(harness_session_id) => LaunchMode::Resume {
+            harness_session_id: harness_session_id.clone(),
+        },
+        None => LaunchMode::Fresh,
+    };
+    let continuation = launch
+        .resumed_from
+        .as_ref()
+        .map(|parent| run::Continuation {
+            parent: parent.clone(),
+            profile: launch.profile.clone(),
+            from_bytes: launch.from_bytes,
+            mode: launch.mode.clone(),
+        });
     let request = LaunchRequest {
         model: launch.model,
         effort: launch.effort,
         prompt: launch.prompt,
         cwd: launch.cwd,
-        mode: LaunchMode::Fresh,
+        mode,
         kind: launch.kind,
         kind_source: launch.kind_source,
     };
-    let launch = run::adopt(&adapter, &request, session)?;
+    let launch = match continuation {
+        Some(continuation) => run::adopt_continuation(&adapter, &request, session, &continuation)?,
+        None => run::adopt(&adapter, &request, session)?,
+    };
     let report = run::headless(
         &adapter,
         &request,
@@ -820,18 +867,9 @@ fn render_stopped(session: &Session, summary: &Summary, action: &str) -> String 
     toon.render()
 }
 
-fn resume(id: &str, prompt: &str) -> Result<i32> {
+fn resume(id: &str, prompt: &str, detach: bool) -> Result<i32> {
     let home = home::boxr_home()?;
-    if let State::Running(_) = detached::state(&home, id)? {
-        return Err(Fail::usage(
-            format!("session {id} is still running"),
-            vec![
-                format!("Run `boxr wait {id}` to block until it finishes"),
-                format!("Run `boxr stop {id}` to end it, then resume the session"),
-            ],
-        )
-        .into());
-    }
+    ensure_finished(&home, id, "resume")?;
     let summary = ledger::read_summary(&home, id)?;
     let harness_session_id = summary.harness_session_id.clone().ok_or_else(|| {
         Fail::usage(
@@ -841,41 +879,16 @@ fn resume(id: &str, prompt: &str) -> Result<i32> {
             )],
         )
     })?;
-    let adapter = harness::lookup(&summary.harness).ok_or_else(|| {
-        Fail::usage(
-            format!("unknown harness `{}`", summary.harness),
-            vec![format!(
-                "Known harnesses: {}",
-                harness::known_ids().join(", ")
-            )],
-        )
-    })?;
+    let adapter = adapter_for_summary(&summary)?;
     let account = summary.profile.clone();
-    let profile = match &account {
-        Some(name) => Some(profile_for(
-            adapter.as_ref(),
-            &home,
-            &summary.harness,
-            name,
-        )?),
-        None => None,
-    };
-    let origin = run::origin_session(&home, id)?;
-    let from_bytes = run::transcript_size(
-        adapter.as_ref(),
-        &run::harness_session_of(&origin),
+    let profile = profile_path(&adapter, &home, &summary.harness, account.as_deref())?;
+    let from_bytes = continuation_offset(
+        &home,
+        id,
         &harness_session_id,
+        adapter.as_ref(),
         profile.as_deref(),
-    )
-    .map_err(|error| {
-        Fail::usage(
-            format!("{error:#}"),
-            vec![
-                format!("Resuming needs the harness transcript of {harness_session_id}"),
-                format!("Run `boxr show {id}` to check the session"),
-            ],
-        )
-    })?;
+    )?;
     let request = LaunchRequest {
         model: summary.model.clone(),
         effort: summary.effort.clone(),
@@ -889,8 +902,12 @@ fn resume(id: &str, prompt: &str) -> Result<i32> {
         parent: id.to_string(),
         profile: account.clone(),
         from_bytes,
+        mode: "resume".to_string(),
     };
     let launch = run::resume(&adapter, &request, &continuation, &home)?;
+    if detach {
+        return spawn_detached(&adapter, &request, launch, account.as_deref());
+    }
     let report = run::headless(
         &adapter,
         &request,
@@ -905,6 +922,147 @@ fn resume(id: &str, prompt: &str) -> Result<i32> {
         report::render(&report, &Session::open(&home, &report.id))
     );
     Ok(EXIT_OK)
+}
+
+fn retry(id: &str, detach: bool) -> Result<i32> {
+    let home = home::boxr_home()?;
+    ensure_finished(&home, id, "retry")?;
+    let summary = ledger::read_summary(&home, id)?;
+    if !summary.limit_hit {
+        return Err(Fail::usage(
+            format!("session {id} did not stop at a harness limit"),
+            vec![
+                format!("Run `boxr show {id}` to check how the session ended"),
+                format!("Run `boxr resume {id} \"<prompt>\"` to continue it with a new prompt"),
+            ],
+        )
+        .into());
+    }
+    let session = Session::open(&home, id);
+    let saved = detached::read_launch(&session)?.ok_or_else(|| {
+        Fail::usage(
+            format!("session {id} has no launch record to retry from"),
+            vec![format!(
+                "Run `boxr show {id}` to check what the session recorded"
+            )],
+        )
+    })?;
+    let adapter = adapter_for_summary(&summary)?;
+    let account = summary.profile.clone();
+    let profile = profile_path(&adapter, &home, &summary.harness, account.as_deref())?;
+    let (mode, from_bytes) = match summary.harness_session_id.clone() {
+        Some(harness_session_id) => (
+            LaunchMode::Resume {
+                harness_session_id: harness_session_id.clone(),
+            },
+            continuation_offset(
+                &home,
+                id,
+                &harness_session_id,
+                adapter.as_ref(),
+                profile.as_deref(),
+            )?,
+        ),
+        None => (LaunchMode::Fresh, 0),
+    };
+    let request = LaunchRequest {
+        model: summary.model.clone(),
+        effort: summary.effort.clone(),
+        prompt: saved.prompt.clone(),
+        cwd: saved.cwd.clone(),
+        mode,
+        kind: summary.kind.clone(),
+        kind_source: summary.kind_source.clone(),
+    };
+    let continuation = run::Continuation {
+        parent: id.to_string(),
+        profile: account.clone(),
+        from_bytes,
+        mode: "retry".to_string(),
+    };
+    let launch = run::resume(&adapter, &request, &continuation, &home)?;
+    if detach {
+        return spawn_detached(&adapter, &request, launch, account.as_deref());
+    }
+    let report = run::headless(
+        &adapter,
+        &request,
+        run::Account {
+            name: account.as_deref(),
+            dir: profile.as_deref(),
+        },
+        launch,
+    )?;
+    print!(
+        "{}",
+        report::render(&report, &Session::open(&home, &report.id))
+    );
+    Ok(EXIT_OK)
+}
+
+fn ensure_finished(home: &Path, id: &str, action: &str) -> Result<()> {
+    if let State::Running(_) = detached::state(home, id)? {
+        return Err(Fail::usage(
+            format!("session {id} is still running"),
+            vec![
+                format!("Run `boxr wait {id}` to block until it finishes"),
+                format!("Run `boxr stop {id}` to end it, then {action} the session"),
+            ],
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn adapter_for_summary(summary: &Summary) -> Result<Arc<dyn harness::Harness>> {
+    harness::lookup(&summary.harness).ok_or_else(|| {
+        Fail::usage(
+            format!("unknown harness `{}`", summary.harness),
+            vec![format!(
+                "Known harnesses: {}",
+                harness::known_ids().join(", ")
+            )],
+        )
+        .into()
+    })
+}
+
+fn profile_path(
+    adapter: &Arc<dyn harness::Harness>,
+    home: &Path,
+    harness_id: &str,
+    account: Option<&str>,
+) -> Result<Option<PathBuf>> {
+    match account {
+        Some(name) => Ok(Some(profile_for(adapter.as_ref(), home, harness_id, name)?)),
+        None => Ok(None),
+    }
+}
+
+fn continuation_offset(
+    home: &Path,
+    id: &str,
+    harness_session_id: &str,
+    adapter: &dyn harness::Harness,
+    profile: Option<&Path>,
+) -> Result<u64> {
+    let origin = run::origin_session(home, id)?;
+    run::transcript_size(
+        adapter,
+        &run::harness_session_of(&origin),
+        harness_session_id,
+        profile,
+    )
+    .map_err(|error| {
+        Fail::usage(
+            format!("{error:#}"),
+            vec![
+                format!("Resuming needs the harness transcript of {harness_session_id}"),
+                format!("Run `boxr show {id}` to check the session"),
+            ],
+        )
+        .into()
+    })
 }
 
 fn resume_cwd(home: &Path, id: &str) -> Result<PathBuf> {

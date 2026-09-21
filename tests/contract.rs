@@ -145,6 +145,52 @@ fn wait_reports_a_failed_turn_with_exit_zero() {
 }
 
 #[test]
+fn resume_detached_reports_the_child_in_the_detached_shape() {
+    let harness = Harness::new();
+    let id = detach(&harness, "hello");
+    let waited = harness.run(&["wait", &id]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+
+    let resumed = harness.run(&["resume", "--detach", &id, "and now?"]);
+    let stdout = stdout_of(&resumed);
+    assert_eq!(resumed.status.code(), Some(0), "{}", stderr_of(&resumed));
+    assert!(stdout.contains("status: running"), "{stdout}");
+    assert!(stdout.contains("harness: claude"), "{stdout}");
+    assert!(stdout.contains("model: opus"), "{stdout}");
+    assert!(stdout.contains(&format!("resumedFrom: {id}")), "{stdout}");
+    let child = session_id_of(&stdout);
+    assert_ne!(child, id, "the detached resume reused the parent id");
+
+    let waited = harness.run(&["wait", &child]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout_of(&waited).contains("status: ok"),
+        "{}",
+        stdout_of(&waited)
+    );
+
+    let status = stdout_of(&harness.run(&["status", &child]));
+    assert_eq!(state_of(&status), "finished", "{status}");
+    let ps = stdout_of(&harness.run(&["ps"]));
+    assert!(ps.contains("sessions[0]{id,state,harness,model}:"), "{ps}");
+}
+
+#[test]
+fn help_mentions_retry_and_the_detached_resume() {
+    let harness = Harness::new();
+    let output = harness.run(&["--help"]);
+    let stdout = stdout_of(&output);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(mentions(&stdout, "retry"), "{stdout}");
+
+    let resume = harness.run(&["resume", "--help"]);
+    let resume_help = stdout_of(&resume);
+    assert_eq!(resume.status.code(), Some(0), "{}", stderr_of(&resume));
+    assert!(mentions(&resume_help, "--detach"), "{resume_help}");
+}
+
+#[test]
 fn stop_exits_zero() {
     let mut harness = Harness::new();
     harness.use_fixture("tools");

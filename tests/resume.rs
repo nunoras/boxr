@@ -169,6 +169,122 @@ fn create_profile(harness: &Harness, profile: &str) {
     .expect("account profile");
 }
 
+fn launch_record(harness: &Harness, id: &str) -> Value {
+    let text =
+        fs::read_to_string(session_home(harness, id).join("launch.json")).expect("launch record");
+    serde_json::from_str(&text).expect("a launch record")
+}
+
+#[test]
+fn resuming_a_finished_session_detached_starts_a_linked_child() {
+    let mut harness = Harness::new();
+    harness.record_args();
+    create_profile(&harness, "work");
+    let parent = launch(
+        &harness,
+        &[
+            "--harness",
+            "claude",
+            "--model",
+            "sonnet",
+            "--effort",
+            "high",
+            "--account",
+            "work",
+            "hello",
+        ],
+    );
+    harness.use_fixture("resume");
+
+    let detached = harness.run(&["resume", "--detach", &parent, "and now?"]);
+    let stdout = stdout_of(&detached);
+    assert_eq!(detached.status.code(), Some(0), "{}", stderr_of(&detached));
+    assert!(stdout.contains("status: running"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {parent}")),
+        "{stdout}"
+    );
+    let child = session_id_of(&stdout);
+    assert_ne!(
+        child, parent,
+        "the detached continuation reused the parent id"
+    );
+
+    let waited = harness.run(&["wait", &child]);
+    let waited_stdout = stdout_of(&waited);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(waited_stdout.contains("status: ok"), "{waited_stdout}");
+
+    let summary = summary_of(&harness.boxr_home(), &child);
+    assert_eq!(summary["mode"], "resume");
+    assert_eq!(summary["resumedFrom"], parent.as_str());
+    assert_eq!(summary["harnessSessionId"], HARNESS_SESSION_ID);
+    assert_eq!(summary["model"], "sonnet");
+    assert_eq!(summary["effort"], "high");
+    assert_eq!(summary["profile"], "work");
+
+    let recorded = launch_record(&harness, &child);
+    assert_eq!(recorded["mode"], "resume");
+    assert_eq!(recorded["resumedFrom"], parent.as_str());
+    assert_eq!(recorded["harnessSessionId"], HARNESS_SESSION_ID);
+    assert_eq!(recorded["profile"], "work");
+    assert_eq!(recorded["prompt"], "and now?");
+    assert!(
+        recorded["fromBytes"].as_u64().unwrap_or_default() > 0,
+        "the persisted transcript offset was not carried: {recorded}"
+    );
+    assert!(
+        recorded["cwd"]
+            .as_str()
+            .is_some_and(|cwd| cwd.ends_with("work")),
+        "the saved cwd was lost: {recorded}"
+    );
+
+    let args = harness.recorded_args();
+    assert!(args.contains(&"--resume".to_string()), "{args:?}");
+    assert!(args.contains(&HARNESS_SESSION_ID.to_string()), "{args:?}");
+    assert_eq!(harness.recorded_prompt(), "and now?");
+
+    let lines = normalized_lines(&session_home(&harness, &child).join("normalized.jsonl"));
+    assert_eq!(lines[0]["extra"]["mode"], "resume");
+    assert_eq!(lines[0]["extra"]["resumedFrom"], parent.as_str());
+    assert_eq!(
+        lines.len(),
+        4,
+        "the detached continuation replayed the original steps: {lines:?}"
+    );
+    assert_eq!(lines[1]["message"], "and now?");
+
+    let parent_summary = summary_of(&harness.boxr_home(), &parent);
+    assert_eq!(parent_summary["mode"], "headless");
+    assert_eq!(parent_summary["resumedFrom"], Value::Null);
+}
+
+#[test]
+fn a_detached_resume_writes_supervisor_lifecycle_lines() {
+    let mut harness = Harness::new();
+    let parent = launch(
+        &harness,
+        &["--harness", "claude", "--model", "sonnet", "hello"],
+    );
+    harness.use_fixture("resume");
+
+    let detached = harness.run(&["resume", "--detach", &parent, "and now?"]);
+    let child = session_id_of(&stdout_of(&detached));
+    let waited = harness.run(&["wait", &child]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+
+    let log = fs::read_to_string(session_home(&harness, &child).join("supervisor.log"))
+        .expect("supervisor log");
+    assert!(log.contains(&format!("supervise start {child}")), "{log}");
+    assert!(log.contains(&format!("supervise finish {child}")), "{log}");
+    assert!(log.contains("exitCode=0"), "{log}");
+    assert!(
+        !log.contains("and now?"),
+        "the supervisor log recorded the prompt: {log}"
+    );
+}
+
 #[test]
 fn a_continuation_can_itself_be_resumed() {
     let harness = Harness::new();

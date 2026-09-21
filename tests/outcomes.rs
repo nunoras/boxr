@@ -458,6 +458,329 @@ fn the_reverted_verdict_survives_a_summary_rewrite() {
     assert!(stdout.contains("verdict: success"), "{stdout}");
 }
 
+#[test]
+fn retry_redrives_a_limit_hit_session_once() {
+    let mut harness = Harness::new();
+    harness.record_args();
+    harness.use_fixture("limit");
+    harness.fail_with("1");
+    let parent_output = harness.run(&[
+        "--harness",
+        "claude",
+        "--model",
+        "sonnet",
+        "--effort",
+        "high",
+        "--kind",
+        "build",
+        "hello",
+    ]);
+    let parent = session_id_of(&stdout_of(&parent_output));
+    assert_eq!(summary_of(&harness.boxr_home(), &parent)["limitHit"], true);
+
+    harness.fail_with("0");
+    harness.use_fixture("retry");
+    let retried = harness.run(&["retry", &parent]);
+    let stdout = stdout_of(&retried);
+    assert_eq!(retried.status.code(), Some(0), "{}", stderr_of(&retried));
+    assert!(stdout.contains("status: ok"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {parent}")),
+        "{stdout}"
+    );
+    let child = session_id_of(&stdout);
+    assert_ne!(child, parent, "the retry reused the limited session id");
+
+    let summary = summary_of(&harness.boxr_home(), &child);
+    assert_eq!(summary["mode"], "retry");
+    assert_eq!(summary["resumedFrom"], parent.as_str());
+    assert_eq!(summary["model"], "sonnet");
+    assert_eq!(summary["effort"], "high");
+    assert_eq!(summary["kind"], "build");
+    assert_eq!(summary["kindSource"], "declared");
+    assert_eq!(
+        summary["harnessSessionId"],
+        "44444444-2222-4333-8444-555555555555"
+    );
+
+    let args = harness.recorded_args();
+    assert!(args.contains(&"--resume".to_string()), "{args:?}");
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--model" && pair[1] == "sonnet"),
+        "{args:?}"
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--effort" && pair[1] == "high"),
+        "{args:?}"
+    );
+    assert_eq!(harness.recorded_prompt(), "hello");
+
+    let mut ids = session_ids(&harness);
+    ids.sort();
+    let mut expected = vec![parent.clone(), child.clone()];
+    expected.sort();
+    assert_eq!(ids, expected, "retry must not recurse into another session");
+
+    let parent_summary = summary_of(&harness.boxr_home(), &parent);
+    assert_eq!(parent_summary["status"], "failed");
+    assert_eq!(parent_summary["limitHit"], true);
+    assert_eq!(parent_summary["resumedFrom"], serde_json::Value::Null);
+}
+
+#[test]
+fn retry_without_a_harness_session_id_starts_a_fresh_linked_child() {
+    let mut harness = Harness::new();
+    harness.record_args();
+    let parent = "s-limited";
+    write_limited_session(&harness, parent);
+
+    let retried = harness.run(&["retry", parent]);
+    let stdout = stdout_of(&retried);
+    assert_eq!(retried.status.code(), Some(0), "{}", stderr_of(&retried));
+    assert!(
+        stdout.contains(&format!("resumedFrom: {parent}")),
+        "{stdout}"
+    );
+    let child = session_id_of(&stdout);
+    assert_ne!(child, parent);
+
+    let summary = summary_of(&harness.boxr_home(), &child);
+    assert_eq!(summary["mode"], "retry");
+    assert_eq!(summary["resumedFrom"], parent);
+    assert_eq!(summary["model"], "sonnet");
+    assert_eq!(summary["effort"], "high");
+    assert_eq!(summary["kind"], "build");
+
+    let args = harness.recorded_args();
+    assert!(
+        !args.contains(&"--resume".to_string()),
+        "a fresh retry fabricated a transcript resume: {args:?}"
+    );
+    assert_eq!(harness.recorded_prompt(), "hello");
+}
+
+#[test]
+fn a_detached_retry_writes_supervisor_lifecycle_lines() {
+    let mut harness = Harness::new();
+    harness.use_fixture("limit");
+    harness.fail_with("1");
+    let parent_output = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let parent = session_id_of(&stdout_of(&parent_output));
+
+    harness.fail_with("0");
+    harness.use_fixture("retry");
+    let detached = harness.run(&["retry", "--detach", &parent]);
+    let stdout = stdout_of(&detached);
+    assert_eq!(detached.status.code(), Some(0), "{}", stderr_of(&detached));
+    assert!(stdout.contains("status: running"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("resumedFrom: {parent}")),
+        "{stdout}"
+    );
+    let child = session_id_of(&stdout);
+
+    let waited = harness.run(&["wait", &child]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout_of(&waited).contains("status: ok"),
+        "{}",
+        stdout_of(&waited)
+    );
+
+    let log = fs::read_to_string(supervisor_log(&harness, &child)).expect("supervisor log");
+    assert!(log.contains(&format!("supervise start {child}")), "{log}");
+    assert!(log.contains(&format!("supervise finish {child}")), "{log}");
+    assert!(log.contains("exitCode=0"), "{log}");
+    assert!(
+        !log.contains("hello"),
+        "the supervisor log recorded the prompt: {log}"
+    );
+}
+
+#[test]
+fn a_failed_supervisor_run_leaves_an_error_trace() {
+    let harness = Harness::new();
+    let mut command = harness.command(
+        &[
+            "--detach",
+            "--harness",
+            "claude",
+            "--model",
+            "opus",
+            "hello",
+        ],
+        Some(&harness.root.path().join("bin")),
+    );
+    command.env("BOXR_TEST_FAIL_JOB_GUARD", "1");
+    let output = command.output().expect("boxr runs");
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    let id = session_id_of(&stdout);
+
+    let waited = harness.run(&["wait", &id]);
+    assert_eq!(waited.status.code(), Some(0), "{}", stderr_of(&waited));
+    assert!(
+        stdout_of(&waited).contains("status: interrupted"),
+        "{}",
+        stdout_of(&waited)
+    );
+
+    let log = fs::read_to_string(supervisor_log(&harness, &id)).expect("supervisor log");
+    assert!(log.contains(&format!("supervise start {id}")), "{log}");
+    assert!(log.contains(&format!("supervise error {id}")), "{log}");
+    assert!(log.contains("exitCode=4"), "{log}");
+}
+
+#[test]
+fn retry_rejects_a_session_that_did_not_hit_a_limit() {
+    let harness = Harness::new();
+    let launched = harness.run(&["--harness", "claude", "--model", "sonnet", "hello"]);
+    let id = session_id_of(&stdout_of(&launched));
+
+    let output = harness.run(&["retry", &id]);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("did not stop at a harness limit"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn retry_rejects_a_session_without_recoverable_metadata() {
+    let harness = Harness::new();
+    append_limit_summary(&harness, "s-nolaunch");
+
+    let output = harness.run(&["retry", "s-nolaunch"]);
+    let stderr = stderr_of(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("no launch record"), "{stderr}");
+}
+
+#[test]
+fn retry_rejects_a_still_running_session() {
+    let mut harness = Harness::new();
+    harness.use_fixture("tools");
+    harness.hang_after(9);
+    let detached = harness.run(&[
+        "--detach",
+        "--harness",
+        "claude",
+        "--model",
+        "opus",
+        "review",
+    ]);
+    let id = session_id_of(&stdout_of(&detached));
+    harness.await_hung_harness();
+
+    let retried = harness.run(&["retry", &id]);
+    let stderr = stderr_of(&retried);
+    assert_eq!(retried.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("still running"), "{stderr}");
+    assert!(stderr.contains(&format!("boxr stop {id}")), "{stderr}");
+
+    harness.kill_hung_harness();
+}
+
+fn session_ids(harness: &Harness) -> Vec<String> {
+    let sessions = harness.boxr_home().join("sessions");
+    fs::read_dir(sessions)
+        .expect("sessions dir")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect()
+}
+
+fn supervisor_log(harness: &Harness, id: &str) -> std::path::PathBuf {
+    harness
+        .boxr_home()
+        .join("sessions")
+        .join(id)
+        .join("supervisor.log")
+}
+
+fn append_limit_summary(harness: &Harness, id: &str) {
+    use std::io::Write;
+    let home = harness.boxr_home();
+    fs::create_dir_all(&home).expect("boxr home");
+    let line = json!({
+        "id": id,
+        "harness": "claude",
+        "model": "sonnet",
+        "mode": "headless",
+        "start": "2026-01-01T00:00:00.000Z",
+        "end": "2026-01-01T00:00:01.000Z",
+        "durationMs": 1000,
+        "status": "failed",
+        "exitCode": 1,
+        "steps": 1,
+        "promptTokens": 1,
+        "completionTokens": 1,
+        "cachedTokens": 0,
+        "limitHit": true
+    });
+    let encoded = serde_json::to_string(&line).expect("summary fixture");
+    writeln!(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.join("summary.jsonl"))
+            .expect("summary ledger"),
+        "{encoded}"
+    )
+    .expect("summary line");
+}
+
+fn write_limited_session(harness: &Harness, id: &str) {
+    use std::io::Write;
+    let home = harness.boxr_home();
+    let dir = home.join("sessions").join(id);
+    fs::create_dir_all(dir.join("raw")).expect("session dir");
+    let launch = json!({
+        "harness": "claude",
+        "model": "sonnet",
+        "effort": "high",
+        "prompt": "hello",
+        "cwd": harness.work_dir(),
+        "startedMillis": 1,
+        "mode": "headless",
+        "kind": "build",
+        "kindSource": "declared"
+    });
+    fs::write(dir.join("launch.json"), format!("{launch}\n")).expect("launch.json");
+    let line = json!({
+        "id": id,
+        "harness": "claude",
+        "model": "sonnet",
+        "effort": "high",
+        "mode": "headless",
+        "start": "2026-01-01T00:00:00.000Z",
+        "end": "2026-01-01T00:00:01.000Z",
+        "durationMs": 1000,
+        "status": "failed",
+        "exitCode": 1,
+        "steps": 1,
+        "promptTokens": 1,
+        "completionTokens": 1,
+        "cachedTokens": 0,
+        "limitHit": true,
+        "kind": "build",
+        "kindSource": "declared"
+    });
+    let encoded = serde_json::to_string(&line).expect("summary fixture");
+    writeln!(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.join("summary.jsonl"))
+            .expect("summary ledger"),
+        "{encoded}"
+    )
+    .expect("summary line");
+}
+
 fn append_summary_update(harness: &Harness, update: &serde_json::Value) {
     use std::io::Write;
     let encoded = serde_json::to_string(update).expect("summary update");
