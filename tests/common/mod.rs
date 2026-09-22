@@ -31,7 +31,7 @@ impl Harness {
         fs::create_dir_all(&bin_dir).expect("bin dir");
         fs::create_dir_all(root.path().join("work")).expect("work dir");
         fs::create_dir_all(root.path().join("claude")).expect("claude config dir");
-        fs::copy(fake_claude(), bin_dir.join(fake_name())).expect("install fake claude");
+        install_fake(&fake_claude(), &bin_dir.join(fake_name()));
         let prompt_file = root.path().join("claude-prompt.txt");
         Harness {
             root,
@@ -81,7 +81,7 @@ impl Harness {
         let tools = self.root.path().join("tools");
         fs::create_dir_all(&tools).expect("tools dir");
         let fake = tools.join("fake-claude.exe");
-        fs::copy(fake_claude(), &fake).expect("install fake claude outside PATH");
+        install_fake(&fake_claude(), &fake);
         fs::write(
             self.bin_dir.join("claude.cmd"),
             format!("@\"{}\" %*\r\n", fake.display()),
@@ -321,6 +321,26 @@ pub fn fake_name() -> &'static str {
 
 pub fn fake_claude() -> PathBuf {
     example_binary("fake-claude")
+}
+
+pub fn install_fake(source: &Path, destination: &Path) {
+    fs::remove_file(destination).ok();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(source, destination).unwrap_or_else(|error| {
+        panic!(
+            "symlink the fake {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    });
+    #[cfg(windows)]
+    fs::copy(source, destination).unwrap_or_else(|error| {
+        panic!(
+            "copy the fake {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    });
 }
 
 pub fn git_exe() -> PathBuf {
