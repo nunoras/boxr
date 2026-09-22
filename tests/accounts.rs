@@ -1,3 +1,6 @@
+mod common;
+
+use common::install_fake;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -28,7 +31,7 @@ impl Sandbox {
         for dir in [&bin_dir, &work, &user_home] {
             fs::create_dir_all(dir).expect("dir");
         }
-        fs::copy(fake_claude(), bin_dir.join(fake_name())).expect("install fake claude");
+        install_fake(&fake_claude(), &bin_dir.join(fake_name()));
         Sandbox {
             config_out: root.path().join("seen-config-dir.txt"),
             root,

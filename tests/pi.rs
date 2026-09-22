@@ -1,8 +1,8 @@
 mod common;
 
 use common::{
-    assert_valid_atif, assert_valid_steps, example_binary, field_of, normalized_lines,
-    path_field_of, session_id_of, sources_of, stderr_of, stdout_of, summary_of,
+    assert_valid_atif, assert_valid_steps, example_binary, field_of, install_fake,
+    normalized_lines, path_field_of, session_id_of, sources_of, stderr_of, stdout_of, summary_of,
 };
 use serde_json::Value;
 use std::fs;
@@ -27,7 +27,7 @@ impl Pi {
         let bin_dir = root.path().join("bin");
         fs::create_dir_all(&bin_dir).expect("bin dir");
         fs::create_dir_all(root.path().join("work")).expect("work dir");
-        fs::copy(example_binary("fake-pi"), bin_dir.join(fake_name())).expect("install fake pi");
+        install_fake(&example_binary("fake-pi"), &bin_dir.join(fake_name()));
         let args_file = root.path().join("pi-args.txt");
         let prompt_file = root.path().join("pi-prompt.txt");
         Pi {

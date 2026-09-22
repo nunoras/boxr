@@ -744,13 +744,15 @@ fn a_job_guard_failure_fails_the_launch() {
     let harness = Harness::new();
     let pid_file = harness.root.path().join("guard-fail.pid");
     let bin_dir = harness.root.path().join("bin");
-    install_orphan_harness(&bin_dir, &pid_file);
+    install_orphan_harness(&bin_dir);
 
     let mut command = harness.command(
         &["--harness", "claude", "--model", "opus", "hello"],
         Some(&bin_dir),
     );
-    command.env("BOXR_TEST_FAIL_JOB_GUARD", "1");
+    command
+        .env("BOXR_TEST_FAIL_JOB_GUARD", "1")
+        .env("BOXR_TEST_ORPHAN_PID", &pid_file);
     let output = command.output().expect("boxr runs");
     let stderr = stderr_of(&output);
     assert_ne!(
@@ -767,26 +769,16 @@ fn a_job_guard_failure_fails_the_launch() {
     await_process_gone(pid);
 }
 
-fn install_orphan_harness(bin_dir: &std::path::Path, pid_file: &std::path::Path) {
+fn install_orphan_harness(bin_dir: &std::path::Path) {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let script = format!(
-            "#!/bin/sh\necho $$ > {}\nexec sleep 60\n",
-            pid_file.display()
-        );
-        let path = bin_dir.join("claude");
-        fs::write(&path, script).expect("orphan harness");
-        let mut permissions = fs::metadata(&path).expect("metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).expect("chmod");
+        let script =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/orphan-harness.sh");
+        install_fake(&script, &bin_dir.join("claude"));
     }
     #[cfg(windows)]
     {
-        let script = format!(
-            "@powershell -NoProfile -Command \"Set-Content -Path '{pid}' -Value $PID; Start-Sleep -Seconds 60\"\r\n",
-            pid = pid_file.display()
-        );
+        let script = "@powershell -NoProfile -Command \"Set-Content -Path $env:BOXR_TEST_ORPHAN_PID -Value $PID; Start-Sleep -Seconds 60\"\r\n";
         fs::remove_file(bin_dir.join("claude.exe")).ok();
         fs::write(bin_dir.join("claude.cmd"), script).expect("orphan harness");
     }
